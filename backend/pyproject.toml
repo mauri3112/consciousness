@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "consciousness-harness"
+version = "0.1.0"
+description = "An always-running procedural loop for LLM agent states."
+readme = "../README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Mauricio" }]
+dependencies = [
+  "fastapi>=0.115.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.8.0",
+  "uvicorn[standard]>=0.30.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "ruff>=0.6.0"
+]
+
+[project.scripts]
+consciousness-api = "consciousness.api:run"
+consciousness-tick = "consciousness.runner:run_once_cli"
+consciousness-loop = "consciousness.runner:run_loop_cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["consciousness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

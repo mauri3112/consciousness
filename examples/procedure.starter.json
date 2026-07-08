@@ -1,0 +1,56 @@
+{
+  "states": [
+    {
+      "id": "gather",
+      "kind": "gather",
+      "goal": "Retrieve high-signal memory context and source links.",
+      "context_minimum": 65536,
+      "model_policy": "cheap-capable"
+    },
+    {
+      "id": "curate",
+      "kind": "curate",
+      "goal": "Propose memory lifecycle changes.",
+      "context_minimum": 65536,
+      "model_policy": "maintenance"
+    },
+    {
+      "id": "synthesize",
+      "kind": "synthesize",
+      "goal": "Create durable bridge artifacts.",
+      "context_minimum": 128000,
+      "model_policy": "balanced"
+    },
+    {
+      "id": "validate",
+      "kind": "validate",
+      "goal": "Check evidence, contradictions, and provenance.",
+      "context_minimum": 128000,
+      "model_policy": "balanced"
+    },
+    {
+      "id": "publish",
+      "kind": "publish",
+      "goal": "Commit accepted outputs and make them visible.",
+      "context_minimum": 32768,
+      "model_policy": "cheap-capable"
+    },
+    {
+      "id": "audit",
+      "kind": "audit",
+      "goal": "Evaluate the loop and propose procedure changes.",
+      "context_minimum": 200000,
+      "model_policy": "auditor"
+    }
+  ],
+  "transitions": [
+    ["gather", "curate"],
+    ["curate", "synthesize"],
+    ["synthesize", "validate"],
+    ["validate", "publish"],
+    ["publish", "audit"],
+    ["audit", "gather"],
+    ["validate", "gather"],
+    ["audit", "curate"]
+  ]
+}

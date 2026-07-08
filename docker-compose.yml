@@ -1,0 +1,25 @@
+services:
+  api:
+    build:
+      context: ./backend
+    environment:
+      CONSCIOUSNESS_DB: /data/consciousness.db
+      ONLY_MEMORIES_URL: ${ONLY_MEMORIES_URL:-http://host.docker.internal:8765}
+      ONLY_MEMORIES_WRITE_RECAPS: ${ONLY_MEMORIES_WRITE_RECAPS:-false}
+    volumes:
+      - consciousness-data:/data
+    ports:
+      - "8770:8770"
+
+  studio:
+    build:
+      context: ./frontend
+      args:
+        VITE_CONSCIOUSNESS_API_URL: ${VITE_CONSCIOUSNESS_API_URL:-http://localhost:8770}
+    ports:
+      - "5174:80"
+    depends_on:
+      - api
+
+volumes:
+  consciousness-data:

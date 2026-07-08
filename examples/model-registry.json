@@ -1,0 +1,38 @@
+[
+  {
+    "id": "local/llama-3.1-8b-instruct",
+    "provider": "ollama",
+    "context_window": 32768,
+    "relative_cost": 0,
+    "quality_tier": 1,
+    "strengths": ["classification", "simple-maintenance", "offline"],
+    "open_weights": true
+  },
+  {
+    "id": "local/qwen2.5-14b-instruct",
+    "provider": "ollama",
+    "context_window": 65536,
+    "relative_cost": 0,
+    "quality_tier": 2,
+    "strengths": ["curation", "structured-output", "offline"],
+    "open_weights": true
+  },
+  {
+    "id": "openai/gpt-4.1-mini",
+    "provider": "openai",
+    "context_window": 128000,
+    "relative_cost": 1,
+    "quality_tier": 3,
+    "strengths": ["balanced", "tool-use", "synthesis"],
+    "open_weights": false
+  },
+  {
+    "id": "frontier/auditor-large",
+    "provider": "configurable",
+    "context_window": 200000,
+    "relative_cost": 4,
+    "quality_tier": 5,
+    "strengths": ["procedure-design", "evaluation", "model-governance"],
+    "open_weights": false
+  }
+]
