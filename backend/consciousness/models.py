@@ -64,6 +64,28 @@ class ModelProfile(BaseModel):
     enabled: bool = True
 
 
+class SourceLink(BaseModel):
+    label: str
+    kind: str
+    uri: str
+
+
+class ArtifactPointer(BaseModel):
+    label: str
+    kind: str
+    uri: str
+    content_hash: str | None = None
+
+
+class RunOutput(BaseModel):
+    summary: str
+    confidence: float = Field(ge=0, le=1)
+    changed_resources: list[ArtifactPointer] = Field(default_factory=list)
+    source_links: list[SourceLink] = Field(default_factory=list)
+    unresolved_risks: list[str] = Field(default_factory=list)
+    next_transition_recommendation: str
+
+
 class RunRecord(BaseModel):
     id: str
     state_id: str
@@ -76,6 +98,40 @@ class RunRecord(BaseModel):
     finished_at: datetime | None = None
     final_thoughts: str | None = None
     changes: list[dict[str, Any]] = Field(default_factory=list)
+    output: RunOutput | None = None
+
+
+class CapabilityPolicy(BaseModel):
+    state_id: str
+    allowed_tool_patterns: list[str]
+    mutation_level: str
+    requires_approval: bool
+    rationale: str
+
+
+class LoopControlPolicy(BaseModel):
+    manual_pause_enabled: bool = True
+    sleep_window: str = "operator-defined"
+    base_backoff_seconds: int = 60
+    max_backoff_seconds: int = 3600
+    max_consecutive_failures: int = 3
+    daily_budget_cap: float = 5.0
+    degraded_mode: str = "local_only"
+
+
+class OutputEvidencePolicy(BaseModel):
+    structured_output_required: bool = True
+    changed_resources_required: bool = True
+    confidence_required: bool = True
+    unresolved_risks_required: bool = True
+    source_links_required: bool = True
+    artifact_pointer_required: bool = True
+
+
+class GuardrailSnapshot(BaseModel):
+    capability_policies: list[CapabilityPolicy]
+    loop_control: LoopControlPolicy
+    evidence_policy: OutputEvidencePolicy
 
 
 class AuditorRecap(BaseModel):
@@ -103,6 +159,7 @@ class ProcedureSnapshot(BaseModel):
     runs: list[RunRecord]
     recaps: list[AuditorRecap]
     integrations: list[IntegrationStatus]
+    guardrails: GuardrailSnapshot
 
 
 class TickResult(BaseModel):

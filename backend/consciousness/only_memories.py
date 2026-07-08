@@ -46,6 +46,7 @@ class OnlyMemoriesClient:
                     "context_window": run.context_window,
                     "context_used": run.context_used,
                     "changes": run.changes,
+                    "structured_output": run.output.model_dump(mode="json") if run.output else None,
                 },
             },
             timeout=self.timeout,

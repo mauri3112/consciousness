@@ -28,4 +28,10 @@ If procedure mutation is too easy, the loop can rewrite its own evaluation crite
 
 If everything is stored only as JSON blobs, the project will become hard to query and debug. JSON is fine for early flexibility, but core concepts should graduate into typed tables and migrations.
 
-If the UI only shows a pretty graph, it will miss the point. The graph is useful only when it exposes run evidence, model budgets, context limits, procedure diffs, and memory writes.
+If the UI only shows a pretty graph, it will miss the point. The graph is useful only when it exposes run evidence, model budgets, context limits, procedure diffs, guardrail boundaries, and memory writes.
+
+## Name As A Useful Provocation
+
+The project name should not be sanitized away. Consciousness can be a productive word here because the project explores intelligence as a loop that can inspect state, carry memory forward, notice failures, preserve evidence, and adapt procedures.
+
+The line to hold is simple: this is not a sentience claim. It is a different conversation about what practical intelligence looks like when memory, context, model choice, budget, and self-audit become durable machinery.

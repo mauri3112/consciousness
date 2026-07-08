@@ -4,7 +4,7 @@ Consciousness is an always-running procedural loop for LLM agents.
 
 The project defines a strongly connected directed graph of agent states. One agent runs at a time. Each state owns a domain, goal, prompt contract, tools, skills, context budget, model policy, and output contract. When a state finishes, it writes a visible durable result so the next state, an auditor, or a restarted process can continue from the last known point.
 
-This is an agent harness, not a claim about machine sentience. The name is useful because the loop maintains an inspectable "state of mind": the active procedure, memory graph health, model choices, final agent thoughts, context pressure, and the recaps produced by the smart auditor.
+This is an agent harness, not a claim about machine sentience. The name intentionally teases a different angle on intelligence: not a single brilliant answer, but a durable loop that can notice its own state, conserve context, choose cheaper or stronger models, change procedure, and leave evidence for the next mind-state to inherit.
 
 ## Why This Exists
 
@@ -30,17 +30,18 @@ The two projects are designed to work together, but neither one should require t
 
 ## What Needs Guardrails
 
-- "Full control" for the smart model is too broad without capability boundaries. Procedure mutations should be versioned, diffed, budget-limited, and auditable.
-- "Never stop" should mean resilient, not reckless. The loop needs backoff, sleep windows, spend caps, health checks, and a manual pause.
-- Final thoughts are useful but not sufficient evidence. Agents should emit structured outputs, changed resources, confidence, unresolved risks, and source links.
-- A DB is necessary but not enough. Large artifacts, code diffs, and generated files need stable source links or content-addressed storage.
-- The project name can mislead people. The README and docs should consistently present this as an orchestration harness with memory state, not a consciousness claim.
+- "Full control" for the smart model is too broad without capability boundaries. Consciousness now has explicit capability policies per state and treats procedure mutation as a versioned, diffed, budget-limited proposal before it becomes applied control.
+- "Never stop" should mean resilient, not reckless. The loop control policy includes manual pause, backoff, sleep-window intent, consecutive-failure limits, daily spend caps, health checks, and degraded local-only mode.
+- Final thoughts are useful but not sufficient evidence. Runs now carry structured outputs: changed resources, source links, confidence, unresolved risks, and next-transition recommendations.
+- A DB is necessary but not enough. Runs can point to stable artifact/source links so large files, code diffs, generated assets, and only-memories writes can stay inspectable without stuffing everything into one row.
+- The name is a provocation, and that is fine. The project should use it to discuss intelligence as stateful self-governance, memory stewardship, budgeted model choice, and procedural adaptation rather than pretending the harness is sentient.
 
 ## Current Scaffold
 
 - Python FastAPI backend.
 - SQLite store for procedure states, transitions, model profiles, runs, auditor recaps, mutations, and integration status.
-- Deterministic single-tick runner that advances the loop and records final thoughts.
+- Deterministic single-tick runner that advances the loop and records final thoughts plus structured evidence output.
+- Guardrail policies for state capabilities, loop control, and evidence requirements.
 - Optional only-memories HTTP adapter.
 - React + Vite studio that visualizes the current graph, state inspector, recaps, model budget, tools, skills, and integration health.
 - Example starter procedure and model registry.
@@ -100,6 +101,7 @@ consciousness/
     consciousness/
       api.py
       config.py
+      guardrails.py
       llm.py
       models.py
       only_memories.py
@@ -115,6 +117,7 @@ consciousness/
   docs/
     architecture.md
     idea-review.md
+    guardrails.md
     model-registry.md
     only-memories-integration.md
     open-source-success.md
@@ -130,6 +133,7 @@ consciousness/
 ```bash
 curl http://localhost:8770/health
 curl http://localhost:8770/procedure
+curl http://localhost:8770/guardrails
 curl -X POST http://localhost:8770/tick
 ```
 

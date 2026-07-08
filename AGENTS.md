@@ -9,6 +9,7 @@ This repo is the orchestration layer for a durable, always-running agent loop.
 - Every state must have a goal, prompt contract, tools, skills, context budget, model policy, and output contract.
 - Every agent run must record the model id, context window, context used, final thoughts, changed resources, and next-state decision.
 - Procedure mutations must be auditable. Add a recap and mutation record whenever a smart auditor changes the graph, model table, prompts, tools, or skills.
+- Treat guardrails as code and data. Capability boundaries, loop-control policy, structured run output, and artifact/source links must stay in sync with docs and UI.
 - Prefer simpler models when they satisfy the state constraints. Escalate only when failure evidence or context requirements justify it.
 - Keep the frontend as an operator console, not a marketing page. Dense, readable, inspectable UI beats decorative presentation.
 

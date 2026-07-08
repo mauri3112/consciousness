@@ -52,6 +52,29 @@ export type RunRecord = {
   finished_at: string | null;
   final_thoughts: string | null;
   changes: Array<Record<string, unknown>>;
+  output: RunOutput | null;
+};
+
+export type RunOutput = {
+  summary: string;
+  confidence: number;
+  changed_resources: ArtifactPointer[];
+  source_links: SourceLink[];
+  unresolved_risks: string[];
+  next_transition_recommendation: string;
+};
+
+export type ArtifactPointer = {
+  label: string;
+  kind: string;
+  uri: string;
+  content_hash: string | null;
+};
+
+export type SourceLink = {
+  label: string;
+  kind: string;
+  uri: string;
 };
 
 export type AuditorRecap = {
@@ -72,6 +95,35 @@ export type IntegrationStatus = {
   details: Record<string, unknown>;
 };
 
+export type CapabilityPolicy = {
+  state_id: string;
+  allowed_tool_patterns: string[];
+  mutation_level: string;
+  requires_approval: boolean;
+  rationale: string;
+};
+
+export type GuardrailSnapshot = {
+  capability_policies: CapabilityPolicy[];
+  loop_control: {
+    manual_pause_enabled: boolean;
+    sleep_window: string;
+    base_backoff_seconds: number;
+    max_backoff_seconds: number;
+    max_consecutive_failures: number;
+    daily_budget_cap: number;
+    degraded_mode: string;
+  };
+  evidence_policy: {
+    structured_output_required: boolean;
+    changed_resources_required: boolean;
+    confidence_required: boolean;
+    unresolved_risks_required: boolean;
+    source_links_required: boolean;
+    artifact_pointer_required: boolean;
+  };
+};
+
 export type ProcedureSnapshot = {
   states: ProcedureState[];
   transitions: Transition[];
@@ -79,6 +131,7 @@ export type ProcedureSnapshot = {
   runs: RunRecord[];
   recaps: AuditorRecap[];
   integrations: IntegrationStatus[];
+  guardrails: GuardrailSnapshot;
 };
 
 const API_URL = import.meta.env.VITE_CONSCIOUSNESS_API_URL ?? "http://localhost:8770";

@@ -15,8 +15,10 @@ from .models import (
     ProcedureState,
     RunRecord,
     RunStatus,
+    RunOutput,
     Transition,
 )
+from .guardrails import default_guardrails
 from .seed import STARTER_MODELS, STARTER_STATES, STARTER_TRANSITIONS
 
 
@@ -41,6 +43,7 @@ class ConsciousnessStore:
     def setup(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            self._ensure_columns(conn)
             self._seed_if_empty(conn)
 
     def snapshot(self) -> ProcedureSnapshot:
@@ -51,6 +54,7 @@ class ConsciousnessStore:
             runs=self.list_runs(limit=20),
             recaps=self.list_recaps(limit=20),
             integrations=self.list_integrations(),
+            guardrails=default_guardrails(),
         )
 
     def list_states(self) -> list[ProcedureState]:
@@ -125,8 +129,8 @@ class ConsciousnessStore:
                 """
                 INSERT INTO runs (
                   id, state_id, goal, status, model_id, context_window, context_used,
-                  started_at, finished_at, final_thoughts, changes_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  started_at, finished_at, final_thoughts, changes_json, output_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run.id,
@@ -140,6 +144,7 @@ class ConsciousnessStore:
                     None,
                     None,
                     "[]",
+                    "{}",
                 ),
             )
         return run
@@ -152,6 +157,7 @@ class ConsciousnessStore:
         context_used: int,
         final_thoughts: str,
         changes: list[dict[str, Any]],
+        output: RunOutput,
     ) -> RunRecord:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
@@ -160,10 +166,18 @@ class ConsciousnessStore:
             conn.execute(
                 """
                 UPDATE runs
-                SET status = ?, context_used = ?, finished_at = ?, final_thoughts = ?, changes_json = ?
+                SET status = ?, context_used = ?, finished_at = ?, final_thoughts = ?, changes_json = ?, output_json = ?
                 WHERE id = ?
                 """,
-                (status.value, context_used, _now_iso(), final_thoughts, json.dumps(changes), run_id),
+                (
+                    status.value,
+                    context_used,
+                    _now_iso(),
+                    final_thoughts,
+                    json.dumps(changes),
+                    output.model_dump_json(),
+                    run_id,
+                ),
             )
             updated = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         return _run_from_row(updated)
@@ -241,6 +255,11 @@ class ConsciousnessStore:
         with self.connect() as conn:
             rows = conn.execute("SELECT * FROM integration_status ORDER BY name").fetchall()
         return [_integration_from_row(row) for row in rows]
+
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        if "output_json" not in columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN output_json TEXT NOT NULL DEFAULT '{}'")
 
     def _seed_if_empty(self, conn: sqlite3.Connection) -> None:
         state_count = conn.execute("SELECT COUNT(*) FROM procedure_states").fetchone()[0]
@@ -383,7 +402,8 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at TEXT NOT NULL,
   finished_at TEXT,
   final_thoughts TEXT,
-  changes_json TEXT NOT NULL
+  changes_json TEXT NOT NULL,
+  output_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS auditor_recaps (
@@ -467,6 +487,7 @@ def _model_from_row(row: sqlite3.Row) -> ModelProfile:
 
 
 def _run_from_row(row: sqlite3.Row) -> RunRecord:
+    output_payload = _json(row["output_json"]) if "output_json" in row.keys() else {}
     return RunRecord(
         id=row["id"],
         state_id=row["state_id"],
@@ -479,6 +500,7 @@ def _run_from_row(row: sqlite3.Row) -> RunRecord:
         finished_at=_parse_datetime(row["finished_at"]),
         final_thoughts=row["final_thoughts"],
         changes=_json(row["changes_json"]),
+        output=RunOutput(**output_payload) if output_payload else None,
     )
 
 

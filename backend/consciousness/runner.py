@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .config import get_settings
 from .llm import choose_model
-from .models import AuditorRecap, IntegrationStatus, RunStatus, TickResult
+from .models import ArtifactPointer, AuditorRecap, IntegrationStatus, RunOutput, RunStatus, SourceLink, TickResult
 from .only_memories import OnlyMemoriesClient
 from .store import ConsciousnessStore, utcnow
 
@@ -36,12 +36,36 @@ def run_once(database_path: Path | None = None) -> TickResult:
             "summary": state.output_contract,
         }
     ]
+    output = RunOutput(
+        summary=state.output_contract,
+        confidence=0.74 if state.id != "audit" else 0.82,
+        changed_resources=[
+            ArtifactPointer(
+                label=f"{state.id} run record",
+                kind="sqlite-row",
+                uri=f"sqlite://runs/{run.id}",
+            )
+        ],
+        source_links=[
+            SourceLink(
+                label=f"{state.name} state contract",
+                kind="procedure-state",
+                uri=f"consciousness://states/{state.id}",
+            )
+        ],
+        unresolved_risks=[
+            "Scaffold executor simulates model output until provider adapters are connected.",
+            "Procedure mutations are proposal-only until approval gates are implemented.",
+        ],
+        next_transition_recommendation=store.next_transition(state.id).target_id,
+    )
     finished = store.finish_run(
         run.id,
         status=RunStatus.succeeded,
         context_used=context_used,
         final_thoughts=final_thoughts,
         changes=changes,
+        output=output,
     )
 
     recap = _maybe_add_recap(store, state.id, finished, model.id)

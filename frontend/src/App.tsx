@@ -75,7 +75,12 @@ export default function App() {
             selectedStateId={selectedState.id}
             onSelect={setSelectedStateId}
           />
-          <Inspector state={selectedState} run={latestRun} modelId={currentModel?.id ?? "unassigned"} />
+          <Inspector
+            state={selectedState}
+            run={latestRun}
+            modelId={currentModel?.id ?? "unassigned"}
+            guardrails={snapshot.guardrails}
+          />
         </section>
         <section className="lower-grid">
           <ActivityStream recaps={snapshot.recaps} />
@@ -249,11 +254,13 @@ function ContextMeter({ value }: { value: number }) {
 function Inspector({
   state,
   run,
-  modelId
+  modelId,
+  guardrails
 }: {
   state: ProcedureState;
   run: ProcedureSnapshot["runs"][number] | undefined;
   modelId: string;
+  guardrails: ProcedureSnapshot["guardrails"];
 }) {
   const contextPercent = run ? Math.round((run.context_used / run.context_window) * 100) : 0;
 
@@ -293,10 +300,40 @@ function Inspector({
           <strong>{contextPercent}%</strong>
         </div>
       </InspectorBlock>
+      <GuardrailsBlock state={state} run={run} guardrails={guardrails} />
       <InspectorBlock title="Final Thoughts">
         <p className="final-thoughts">{run?.final_thoughts ?? "No run has completed yet."}</p>
       </InspectorBlock>
     </aside>
+  );
+}
+
+function GuardrailsBlock({
+  state,
+  run,
+  guardrails
+}: {
+  state: ProcedureState;
+  run: ProcedureSnapshot["runs"][number] | undefined;
+  guardrails: ProcedureSnapshot["guardrails"];
+}) {
+  const policy = guardrails.capability_policies.find((item) => item.state_id === state.id);
+  const confidence = run?.output?.confidence;
+
+  return (
+    <InspectorBlock title="Guardrails">
+      <div className="guardrail-grid">
+        <span>Mutation</span>
+        <strong>{policy?.mutation_level ?? "bounded"}</strong>
+        <span>Approval</span>
+        <strong>{policy?.requires_approval ? "required" : "not required"}</strong>
+        <span>Confidence</span>
+        <strong>{confidence ? `${Math.round(confidence * 100)}%` : "pending"}</strong>
+        <span>Backoff</span>
+        <strong>{guardrails.loop_control.base_backoff_seconds}s</strong>
+      </div>
+      <p className="guardrail-note">{policy?.rationale ?? "State tools are constrained by procedure policy."}</p>
+    </InspectorBlock>
   );
 }
 

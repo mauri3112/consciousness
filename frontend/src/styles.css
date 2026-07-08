@@ -493,6 +493,29 @@ button {
   background: var(--panel-soft);
 }
 
+.guardrail-grid {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 7px 10px;
+  margin-bottom: 9px;
+}
+
+.guardrail-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.guardrail-grid strong {
+  color: #1f2937;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.guardrail-note {
+  margin: 0;
+  color: #4b5c6d;
+}
+
 .lower-grid {
   display: grid;
   grid-template-columns: minmax(420px, 1fr) minmax(380px, 0.8fr) 320px;

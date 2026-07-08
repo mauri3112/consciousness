@@ -128,7 +128,15 @@ export const sampleSnapshot: ProcedureSnapshot = {
       started_at: now,
       finished_at: now,
       final_thoughts: "Published recap artifacts and left validation risks visible to the auditor.",
-      changes: [{ kind: "memory-recap", visible_to_next_agent: true }]
+      changes: [{ kind: "memory-recap", visible_to_next_agent: true }],
+      output: {
+        summary: "Committed memory writes, recap entries, and links to changed resources.",
+        confidence: 0.78,
+        changed_resources: [{ label: "publish run record", kind: "sqlite-row", uri: "sqlite://runs/run_preview_01", content_hash: null }],
+        source_links: [{ label: "Publish state contract", kind: "procedure-state", uri: "consciousness://states/publish" }],
+        unresolved_risks: ["Provider adapters are not connected in preview mode."],
+        next_transition_recommendation: "audit"
+      }
     }
   ],
   recaps: [
@@ -150,5 +158,47 @@ export const sampleSnapshot: ProcedureSnapshot = {
       last_checked_at: now,
       details: { mode: "read/write recaps when enabled" }
     }
-  ]
+  ],
+  guardrails: {
+    capability_policies: [
+      {
+        state_id: "gather",
+        allowed_tool_patterns: ["only_memories.search", "only_memories.navigate", "filesystem.read"],
+        mutation_level: "read_only",
+        requires_approval: false,
+        rationale: "Gather can inspect context but cannot mutate memory or procedure state."
+      },
+      {
+        state_id: "publish",
+        allowed_tool_patterns: ["only_memories.remember", "filesystem.write", "git.diff"],
+        mutation_level: "accepted_write",
+        requires_approval: true,
+        rationale: "Publish makes accepted changes visible and should record rollback links."
+      },
+      {
+        state_id: "audit",
+        allowed_tool_patterns: ["consciousness.procedure.read", "consciousness.procedure.mutate", "git.diff"],
+        mutation_level: "procedure_proposal",
+        requires_approval: true,
+        rationale: "Audit can propose procedure mutations, but applied changes must be diffed and versioned."
+      }
+    ],
+    loop_control: {
+      manual_pause_enabled: true,
+      sleep_window: "operator-defined",
+      base_backoff_seconds: 60,
+      max_backoff_seconds: 3600,
+      max_consecutive_failures: 3,
+      daily_budget_cap: 5,
+      degraded_mode: "local_only"
+    },
+    evidence_policy: {
+      structured_output_required: true,
+      changed_resources_required: true,
+      confidence_required: true,
+      unresolved_risks_required: true,
+      source_links_required: true,
+      artifact_pointer_required: true
+    }
+  }
 };

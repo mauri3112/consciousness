@@ -5,7 +5,8 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .models import ProcedureSnapshot, TickResult
+from .guardrails import default_guardrails
+from .models import GuardrailSnapshot, ProcedureSnapshot, TickResult
 from .runner import run_once
 from .store import ConsciousnessStore
 
@@ -36,6 +37,11 @@ def health(store: ConsciousnessStore = Depends(get_store)) -> dict[str, str]:
 @app.get("/procedure", response_model=ProcedureSnapshot)
 def procedure(store: ConsciousnessStore = Depends(get_store)) -> ProcedureSnapshot:
     return store.snapshot()
+
+
+@app.get("/guardrails", response_model=GuardrailSnapshot)
+def guardrails() -> GuardrailSnapshot:
+    return default_guardrails()
 
 
 @app.post("/tick", response_model=TickResult)

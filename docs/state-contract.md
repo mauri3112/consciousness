@@ -28,6 +28,8 @@ Every run should emit:
 - changed resources,
 - confidence,
 - unresolved risks,
+- source links,
+- artifact pointers,
 - next transition recommendation.
 
 ## Final Thoughts
