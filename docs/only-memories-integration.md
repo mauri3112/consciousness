@@ -8,6 +8,8 @@ Consciousness should not import only-memories internals. It integrates through p
 - MCP tools such as `remember`, `recall`, `navigate_memory`, and `reinforce_connection`.
 - Source links that point back to files, run records, dashboard URLs, or local resources.
 
+The local v1 HTTP adapter covers health, ranked search, navigation, version history, create, soft-forget, restore, and connection reinforcement. Every mutating call is recorded with an idempotency key; destructive lifecycle actions require approval.
+
 ## Suggested Flow
 
 1. Gather state searches only-memories for relevant memories and graph neighbors.

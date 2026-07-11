@@ -1,15 +1,48 @@
+x-backend-environment: &backend-environment
+  CONSCIOUSNESS_DB: /data/consciousness.db
+  CONSCIOUSNESS_ARTIFACT_ROOT: /data/artifacts
+  CONSCIOUSNESS_EXECUTION_MODE: ${CONSCIOUSNESS_EXECUTION_MODE:-preview}
+  CONSCIOUSNESS_LOOP_INTERVAL_SECONDS: ${CONSCIOUSNESS_LOOP_INTERVAL_SECONDS:-60}
+  CONSCIOUSNESS_API_HOST: 0.0.0.0
+  CONSCIOUSNESS_ALLOW_INSECURE_BIND: "true"
+  CONSCIOUSNESS_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174
+  ONLY_MEMORIES_URL: ${ONLY_MEMORIES_URL:-http://host.docker.internal:8765}
+  ONLY_MEMORIES_WRITE_RECAPS: ${ONLY_MEMORIES_WRITE_RECAPS:-false}
+  OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
 services:
   api:
     build:
       context: ./backend
-    environment:
-      CONSCIOUSNESS_DB: /data/consciousness.db
-      ONLY_MEMORIES_URL: ${ONLY_MEMORIES_URL:-http://host.docker.internal:8765}
-      ONLY_MEMORIES_WRITE_RECAPS: ${ONLY_MEMORIES_WRITE_RECAPS:-false}
+    environment: *backend-environment
     volumes:
       - consciousness-data:/data
     ports:
-      - "8770:8770"
+      - "127.0.0.1:8770:8770"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8770/api/v1/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  worker:
+    build:
+      context: ./backend
+    command: ["consciousness-worker"]
+    environment: *backend-environment
+    volumes:
+      - consciousness-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "consciousness-worker-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
 
   studio:
     build:
@@ -17,9 +50,15 @@ services:
       args:
         VITE_CONSCIOUSNESS_API_URL: ${VITE_CONSCIOUSNESS_API_URL:-http://localhost:8770}
     ports:
-      - "5174:80"
+      - "127.0.0.1:5174:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
 
 volumes:
   consciousness-data:

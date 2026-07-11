@@ -36,21 +36,21 @@ Each state owns:
 
 ## Execution Loop
 
-The loop is intentionally simple in the scaffold:
+The API and worker are separate processes. The API writes durable commands; the worker must hold the renewable singleton lease before it may execute:
 
 1. Read the current state.
-2. Choose the cheapest enabled model that satisfies the state context and policy.
-3. Start a durable run row.
-4. Execute the state.
-5. Store final thoughts, changed resources, and context usage.
-6. Record an auditor or loop-recorder recap.
-7. Advance through the highest-weight active transition.
+2. Assemble and persist the context manifest, then choose the cheapest eligible model after context, capability, privacy, and budget constraints.
+3. Start a run pinned to the immutable procedure version.
+4. Checkpoint provider and tool activity through append-only events and idempotent tool-call records.
+5. Validate the state-specific structured payload and record usage, cost, sources, artifacts, changes, and operational final thoughts.
+6. Apply safe additive actions or stage risky actions for approval.
+7. Evaluate the declarative transition guard and atomically advance the current-state marker.
 
-Later versions should replace the deterministic scaffold executor with provider adapters and structured agent output validation.
+Preview execution is explicit. Live execution uses the OpenAI Responses or Ollama chat adapter.
 
 ## Restart Semantics
 
-SQLite is the source of truth. If the process crashes, a recovery agent should inspect unfinished runs, decide whether to resume, replay, mark failed, or request a stronger audit pass.
+SQLite is the source of truth. An expired worker lease marks stale in-flight runs interrupted. A later attempt re-executes the state from committed checkpoints; uncertain non-idempotent writes are never replayed automatically.
 
 The system should never rely on an in-memory queue as the only copy of procedural state.
 

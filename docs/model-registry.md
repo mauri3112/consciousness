@@ -14,7 +14,7 @@ Each row should define:
 - whether the weights are open,
 - whether the model is enabled.
 
-The smart auditor uses this table to choose the simplest model that can succeed.
+The runner uses this table to choose the simplest model that can succeed. Context, required capabilities, privacy mode, provider availability, and budget are hard filters; cost and tier are ranking inputs.
 
 ## Selection Policy
 
@@ -32,7 +32,7 @@ Default preference order:
 | --- | --- | ---: | ---: | ---: | --- |
 | `local/llama-3.1-8b-instruct` | Ollama | 32,768 | 0.0x | 1 | offline classification |
 | `local/qwen2.5-14b-instruct` | Ollama | 65,536 | 0.0x | 2 | curation and structured output |
-| `openai/gpt-4.1-mini` | OpenAI | 128,000 | 1.0x | 3 | balanced synthesis and tool use |
-| `frontier/auditor-large` | configurable | 200,000 | 4.0x | 5 | procedure design and audits |
+| `openai/gpt-5.6-luna` | OpenAI | operator-confirmed | configured | 3 | efficient structured work |
+| `openai/gpt-5.6-sol` | OpenAI | operator-confirmed | configured | 5 | procedure design and audits |
 
-Operators should update actual provider pricing in their own registry. The scaffold uses relative costs to avoid baking stale pricing into the project.
+Operators must confirm model availability, context limits, capabilities, and pricing in their registry. Pricing and model IDs are data rather than selection code so examples cannot silently become current facts.

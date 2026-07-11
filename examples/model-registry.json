@@ -2,37 +2,49 @@
   {
     "id": "local/llama-3.1-8b-instruct",
     "provider": "ollama",
+    "model": "llama3.1:8b-instruct",
     "context_window": 32768,
     "relative_cost": 0,
+    "max_run_budget": 0,
     "quality_tier": 1,
     "strengths": ["classification", "simple-maintenance", "offline"],
+    "capabilities": ["structured-output"],
     "open_weights": true
   },
   {
     "id": "local/qwen2.5-14b-instruct",
     "provider": "ollama",
+    "model": "qwen2.5:14b-instruct",
     "context_window": 65536,
     "relative_cost": 0,
+    "max_run_budget": 0,
     "quality_tier": 2,
     "strengths": ["curation", "structured-output", "offline"],
+    "capabilities": ["structured-output", "tool-calling"],
     "open_weights": true
   },
   {
-    "id": "openai/gpt-4.1-mini",
+    "id": "openai/gpt-5.6-luna",
     "provider": "openai",
+    "model": "gpt-5.6-luna",
     "context_window": 128000,
     "relative_cost": 1,
+    "max_run_budget": 0.15,
     "quality_tier": 3,
-    "strengths": ["balanced", "tool-use", "synthesis"],
+    "strengths": ["balanced", "tool-use", "synthesis", "structured-output"],
+    "capabilities": ["structured-output", "tool-calling", "web-search"],
     "open_weights": false
   },
   {
-    "id": "frontier/auditor-large",
-    "provider": "configurable",
+    "id": "openai/gpt-5.6-sol",
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
     "context_window": 200000,
     "relative_cost": 4,
+    "max_run_budget": 1,
     "quality_tier": 5,
     "strengths": ["procedure-design", "evaluation", "model-governance"],
+    "capabilities": ["structured-output", "tool-calling", "web-search"],
     "open_weights": false
   }
 ]

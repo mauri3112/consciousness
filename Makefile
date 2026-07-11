@@ -1,4 +1,4 @@
-.PHONY: api ui tick loop test backend-test frontend-build docker
+.PHONY: api ui tick loop worker test backend-test frontend-build docker
 
 api:
 	cd backend && consciousness-api
@@ -11,6 +11,9 @@ tick:
 
 loop:
 	cd backend && consciousness-loop
+
+worker:
+	cd backend && consciousness-worker
 
 backend-test:
 	cd backend && pytest

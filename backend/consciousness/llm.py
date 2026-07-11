@@ -3,12 +3,26 @@ from __future__ import annotations
 from .models import ModelProfile, ProcedureState
 
 
-def choose_model(state: ProcedureState, models: list[ModelProfile]) -> ModelProfile:
-    """Choose the lowest-cost model that satisfies the state policy."""
+def choose_model(
+    state: ProcedureState,
+    models: list[ModelProfile],
+    *,
+    daily_spend: float = 0,
+    daily_budget_cap: float | None = None,
+    required_capabilities: set[str] | None = None,
+    local_only: bool = False,
+) -> ModelProfile:
+    """Choose the cheapest eligible model after applying hard constraints."""
+    required = required_capabilities or {"structured-output"}
     eligible = [
         model
         for model in models
-        if model.enabled and model.context_window >= state.context_minimum
+        if model.enabled
+        and model.context_window >= state.context_minimum
+        and required <= set(model.capabilities)
+        and (not local_only or model.provider in {"ollama", "local"})
+        and (state.max_run_budget is None or model.max_run_budget <= state.max_run_budget)
+        and (daily_budget_cap is None or model.provider in {"ollama", "local"} or daily_spend + model.max_run_budget <= daily_budget_cap)
     ]
     if not eligible:
         raise RuntimeError(f"no enabled model can satisfy {state.context_minimum} context tokens")

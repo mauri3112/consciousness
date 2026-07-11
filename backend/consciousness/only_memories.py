@@ -27,6 +27,48 @@ class OnlyMemoriesClient:
         response.raise_for_status()
         return response.json()
 
+    def navigate(self, memory_id: str, limit: int = 8) -> dict[str, Any]:
+        response = httpx.get(
+            f"{self.base_url}/memories/{memory_id}/navigate",
+            params={"limit": limit},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def versions(self, memory_id: str) -> dict[str, Any]:
+        response = httpx.get(f"{self.base_url}/memories/{memory_id}/versions", timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def remember(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = httpx.post(f"{self.base_url}/memories", json=payload, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def forget(self, memory_id: str, reason: str | None = None) -> dict[str, Any]:
+        response = httpx.post(
+            f"{self.base_url}/memories/{memory_id}/forget",
+            json={"reason": reason} if reason else {},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def restore(self, memory_id: str) -> dict[str, Any]:
+        response = httpx.post(f"{self.base_url}/memories/{memory_id}/restore", timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def reinforce(self, source_id: str, target_id: str, amount: float, reason: str) -> dict[str, Any]:
+        response = httpx.post(
+            f"{self.base_url}/connections/reinforce",
+            json={"source_id": source_id, "target_id": target_id, "amount": amount, "reason": reason},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def remember_run_recap(self, run: RunRecord, state_name: str) -> dict[str, Any]:
         response = httpx.post(
             f"{self.base_url}/memories",

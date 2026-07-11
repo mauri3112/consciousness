@@ -32,6 +32,8 @@ Every run should emit:
 - artifact pointers,
 - next transition recommendation.
 
+The shared envelope carries one discriminated payload: `ContextBundle`, `MemoryChangeProposal`, `SynthesisArtifact`, `ValidationReport`, `PublishReceipt`, or `AuditDecision`. Every run is also pinned to a procedure version and records provider, attempt, context manifest, token usage, cost, heartbeat, errors, and append-only lifecycle events.
+
 ## Final Thoughts
 
 Final thoughts are not hidden chain of thought. They are concise operational reflections intended for later agents and the smart auditor:

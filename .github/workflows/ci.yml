@@ -18,6 +18,8 @@ jobs:
         working-directory: backend
       - run: pytest
         working-directory: backend
+      - run: ruff check consciousness tests
+        working-directory: backend
 
   frontend:
     runs-on: ubuntu-latest
@@ -32,3 +34,23 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Operator safety browser flow
+        working-directory: frontend
+        run: |
+          npm run dev -- --host 127.0.0.1 > /tmp/consciousness-studio.log 2>&1 &
+          studio_pid=$!
+          trap 'kill "$studio_pid"' EXIT
+          for attempt in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5173 >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5173 >/dev/null
+          npm run verify:operator
+
+  compose-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config

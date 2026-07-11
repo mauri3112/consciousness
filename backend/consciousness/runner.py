@@ -1,186 +1,478 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import threading
 import time
+import uuid
 from pathlib import Path
+from typing import Any
 
-from .config import get_settings
+from .artifacts import ArtifactStore
+from .config import Settings, get_settings
+from .context import assemble_prompt, build_context_manifest
 from .llm import choose_model
-from .models import ArtifactPointer, AuditorRecap, IntegrationStatus, RunOutput, RunStatus, SourceLink, TickResult
+from .models import (
+    ArtifactPointer,
+    AuditDecision,
+    AuditorRecap,
+    CapabilityPolicy,
+    CommandKind,
+    IntegrationStatus,
+    MemoryChangeProposal,
+    PublishReceipt,
+    RunStatus,
+    RuntimeStatus,
+    SourceLink,
+    SynthesisArtifact,
+    TickResult,
+)
 from .only_memories import OnlyMemoriesClient
+from .operations import configure_structured_logging
+from .providers import ProviderError, ProviderRequest, ProviderTool, build_provider
+from .procedure_patch import apply_procedure_patch
 from .store import ConsciousnessStore, utcnow
+from .tools import ToolRegistry, build_tool_registry
 
 
-def run_once(database_path: Path | None = None) -> TickResult:
-    settings = get_settings()
-    store = ConsciousnessStore(database_path or settings.database_path)
-    store.setup()
+logger = logging.getLogger("consciousness.worker")
 
-    _check_only_memories(store, settings.only_memories_url)
 
-    state = store.current_state()
-    model = choose_model(state, store.list_models())
-    run = store.begin_run(state, model)
+class _LeaseHeartbeat:
+    def __init__(self, store: ConsciousnessStore, worker_id: str, lease_seconds: int) -> None:
+        self.store = store
+        self.worker_id = worker_id
+        self.lease_seconds = lease_seconds
+        self.run_id: str | None = None
+        self._lost = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f"lease-heartbeat-{worker_id}", daemon=True)
 
-    context_used = _estimate_context_use(state.context_minimum, model.context_window)
-    final_thoughts = (
-        f"{state.name} completed a scaffolded pass. "
-        f"Recorded state output for downstream agents and preserved context budget at "
-        f"{context_used}/{model.context_window} tokens."
-    )
-    changes = [
-        {
-            "kind": "state-output",
-            "state_id": state.id,
-            "visible_to_next_agent": True,
-            "summary": state.output_contract,
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=max(1.0, self.lease_seconds / 2))
+
+    def assert_owned(self) -> None:
+        if self._lost.is_set():
+            raise RuntimeError("worker execution lease was lost")
+
+    def _run(self) -> None:
+        interval = max(1.0, self.lease_seconds / 3)
+        while not self._stop.wait(interval):
+            try:
+                if not self.store.renew_lease(self.worker_id, self.lease_seconds):
+                    self._lost.set()
+                    return
+                if self.run_id:
+                    self.store.heartbeat_run(self.run_id)
+            except Exception:
+                self._lost.set()
+                return
+
+
+class _ProviderToolExecutor:
+    def __init__(self, registry: ToolRegistry, *, run_id: str, policy: CapabilityPolicy) -> None:
+        self.registry = registry
+        self.run_id = run_id
+        self.policy = policy
+        self._call_index = 0
+
+    def reset(self) -> None:
+        """Replay a provider attempt with the same durable idempotency keys."""
+        self._call_index = 0
+
+    def __call__(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        self._call_index += 1
+        durable_arguments = dict(arguments)
+        if tool_name == "artifact.write":
+            durable_arguments["run_id"] = self.run_id
+        execution = self.registry.execute(
+            run_id=self.run_id,
+            tool_name=tool_name,
+            arguments=durable_arguments,
+            policy=self.policy,
+            step_key=f"provider-tool-{self._call_index:04d}",
+        )
+        return {
+            "status": execution.status,
+            "result": execution.result,
+            "approval_id": execution.approval_id,
         }
-    ]
-    output = RunOutput(
-        summary=state.output_contract,
-        confidence=0.74 if state.id != "audit" else 0.82,
-        changed_resources=[
-            ArtifactPointer(
-                label=f"{state.id} run record",
-                kind="sqlite-row",
-                uri=f"sqlite://runs/{run.id}",
-            )
-        ],
-        source_links=[
-            SourceLink(
-                label=f"{state.name} state contract",
-                kind="procedure-state",
-                uri=f"consciousness://states/{state.id}",
-            )
-        ],
-        unresolved_risks=[
-            "Scaffold executor simulates model output until provider adapters are connected.",
-            "Procedure mutations are proposal-only until approval gates are implemented.",
-        ],
-        next_transition_recommendation=store.next_transition(state.id).target_id,
-    )
-    finished = store.finish_run(
-        run.id,
-        status=RunStatus.succeeded,
-        context_used=context_used,
-        final_thoughts=final_thoughts,
-        changes=changes,
-        output=output,
-    )
-
-    recap = _maybe_add_recap(store, state.id, finished, model.id)
-    transition = store.next_transition(state.id)
-    next_state = store.set_current_state(transition.target_id)
-
-    if settings.only_memories_write_recaps and settings.only_memories_url:
-        _write_recap_to_only_memories(settings.only_memories_url, finished, state.name, store)
-
-    return TickResult(run=finished, previous_state=state, next_state=next_state, recap=recap)
 
 
-def run_loop(database_path: Path | None = None, interval_seconds: int | None = None) -> None:
+def run_once(database_path: Path | None = None, *, worker_id: str | None = None, hold_lease: bool = False) -> TickResult:
     settings = get_settings()
-    interval = interval_seconds or settings.loop_interval_seconds
-    while True:
-        result = run_once(database_path)
-        print(
-            f"{result.run.id}: {result.previous_state.id} -> {result.next_state.id} "
-            f"using {result.run.model_id}"
+    store = ConsciousnessStore(database_path or settings.database_path, execution_mode=settings.execution_mode)
+    store.setup()
+    owner = worker_id or f"tick-{uuid.uuid4().hex[:8]}"
+    if not store.acquire_lease(owner, settings.worker_lease_seconds):
+        raise RuntimeError("another worker owns the active execution lease")
+    heartbeat = _LeaseHeartbeat(store, owner, settings.worker_lease_seconds)
+    heartbeat.start()
+
+    try:
+        store.recover_stale_work(settings.worker_lease_seconds * 2)
+        only_memories = OnlyMemoriesClient(settings.only_memories_url) if settings.only_memories_url else None
+        _check_only_memories(store, only_memories, settings.only_memories_url)
+        runtime = store.runtime()
+        if runtime.backoff_until and runtime.backoff_until > utcnow():
+            raise RuntimeError(f"execution backoff remains active until {runtime.backoff_until.isoformat()}")
+        definition = store.current_version().definition
+        state = store.current_state()
+        local_only = runtime.status == RuntimeStatus.degraded or store.daily_spend() >= runtime.daily_budget_cap
+        model = choose_model(
+            state,
+            store.list_models(),
+            daily_spend=store.daily_spend(),
+            daily_budget_cap=runtime.daily_budget_cap,
+            local_only=local_only,
         )
-        time.sleep(interval)
+        previous_runs = [run for run in store.list_runs(limit=20) if run.status == RunStatus.succeeded]
+        previous = previous_runs[0] if previous_runs else None
+        manifest = build_context_manifest(state, only_memories=only_memories, previous_runs=previous_runs)
+        instructions, input_text = assemble_prompt(state, manifest, previous)
+        run = store.begin_run(state, model, manifest=manifest)
+        heartbeat.run_id = run.id
+        logger.info(
+            "run started",
+            extra={"fields": {"run_id": run.id, "state_id": state.id, "model_id": model.id, "worker_id": owner}},
+        )
+        store.add_event("provider.requested", {"provider": model.provider, "model": model.model}, run_id=run.id)
 
+        provider = build_provider(
+            model,
+            execution_mode=settings.execution_mode,
+            openai_api_key=settings.openai_api_key,
+            ollama_url=settings.ollama_url,
+        )
+        artifacts = ArtifactStore(settings.artifact_root, store)
+        registry = build_tool_registry(store, only_memories=only_memories, artifacts=artifacts)
+        policy = next(
+            (item for item in definition.guardrails.capability_policies if item.state_id == state.id),
+            None,
+        )
+        if policy is None:
+            raise RuntimeError(f"state {state.id!r} has no capability policy")
+        allowed_state_tools = set(state.tools)
+        provider_tools = [
+            ProviderTool(tool.name, tool.description, tool.input_schema)
+            for tool in registry.definitions_for(policy)
+            if tool.name in allowed_state_tools
+        ]
+        tool_executor = _ProviderToolExecutor(registry, run_id=run.id, policy=policy)
+        request = ProviderRequest(
+            state=state,
+            model=model,
+            context=manifest,
+            previous_output=previous.output if previous else None,
+            instructions=instructions,
+            input_text=input_text,
+            tools=provider_tools,
+            execute_tool=tool_executor if provider_tools else None,
+        )
+        tool_executor.reset()
+        try:
+            result = provider.execute(request)
+        except ProviderError as exc:
+            if exc.retryable:
+                store.add_event("provider.retry", {"category": exc.category}, run_id=run.id)
+                time.sleep(0.25)
+                tool_executor.reset()
+                result = provider.execute(request)
+            else:
+                raise
+        heartbeat.assert_owned()
 
-def run_once_cli() -> None:
-    parser = argparse.ArgumentParser(description="Advance the consciousness loop once.")
-    parser.add_argument("--db", type=Path, default=None, help="SQLite database path.")
-    args = parser.parse_args()
-    result = run_once(args.db)
-    print(result.model_dump_json(indent=2))
+        store.add_event("output.validated", {"payload_kind": result.output.payload.kind if result.output.payload else None}, run_id=run.id)
+        changed_resources: list[ArtifactPointer] = list(result.output.changed_resources)
+        changes: list[dict[str, object]] = []
 
+        if isinstance(result.output.payload, SynthesisArtifact):
+            pointer = artifacts.write_text(
+                run.id,
+                "synthesis.md",
+                f"# {result.output.payload.title}\n\n{result.output.payload.body}\n",
+                label=result.output.payload.title,
+            )
+            changed_resources.append(pointer)
+            changes.append({"kind": "artifact", "uri": pointer.uri})
 
-def run_loop_cli() -> None:
-    parser = argparse.ArgumentParser(description="Run the consciousness loop forever.")
-    parser.add_argument("--db", type=Path, default=None, help="SQLite database path.")
-    parser.add_argument("--interval", type=int, default=None, help="Seconds between ticks.")
-    args = parser.parse_args()
-    run_loop(args.db, args.interval)
+        if state.kind == "publish":
+            receipt = _publish_validated_changes(store, registry, run.id, definition.guardrails.capability_policies)
+            result.output.payload = receipt
+            changes.extend({"kind": "memory-write", "id": item} for item in receipt.applied)
 
+        if isinstance(result.output.payload, AuditDecision) and result.output.payload.decision == "propose_mutation":
+            approval_id = _stage_audit_mutation(store, run.id, result.output.payload)
+            if approval_id:
+                changes.append({"kind": "procedure-mutation-proposal", "approval_id": approval_id})
 
-def _estimate_context_use(minimum: int, context_window: int) -> int:
-    target = max(int(minimum * 0.72), 4_096)
-    return min(target, int(context_window * 0.82))
+        result.output.changed_resources = changed_resources or [
+            ArtifactPointer(label=f"{state.id} run", kind="sqlite-row", uri=f"sqlite://runs/{run.id}")
+        ]
+        if not result.output.source_links:
+            result.output.source_links = [
+                SourceLink(label=f"{state.name} contract", kind="procedure-state", uri=f"consciousness://states/{state.id}")
+            ]
 
-
-def _maybe_add_recap(store: ConsciousnessStore, state_id: str, run, model_id: str) -> AuditorRecap | None:
-    if state_id != "audit":
-        return store.add_recap(
+        cost = _calculate_cost(model.input_cost_per_million, model.output_cost_per_million, result.input_tokens, result.output_tokens)
+        context_used = result.input_tokens or manifest.total_estimated_tokens
+        final_thoughts = (
+            f"{state.name} completed with {len(result.output.source_links)} sources, "
+            f"{len(result.output.changed_resources)} changed resources, and "
+            f"{context_used}/{model.context_window} context tokens recorded."
+        )
+        finished = store.finish_run(
+            run.id,
+            status=RunStatus.succeeded,
+            context_used=context_used,
+            final_thoughts=final_thoughts,
+            changes=changes,
+            output=result.output,
+            provider_request_id=result.request_id,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cached_tokens=result.cached_tokens,
+            cost=cost,
+        )
+        heartbeat.assert_owned()
+        recap = _add_recap(store, state.id, finished.id, model.id, result.output.summary)
+        transition = store.next_transition(state.id, result.output)
+        next_state = store.set_current_state(transition.target_id)
+        store.add_event(
+            "transition.committed",
+            {"transition_id": transition.id, "source": state.id, "target": next_state.id},
             run_id=run.id,
-            auditor_model_id="loop-recorder",
-            summary=f"{state_id} run succeeded and exposed its state output to the next agent.",
-            decision="continue",
-            procedure_changes=[],
         )
+        if settings.only_memories_write_recaps and only_memories:
+            _write_recap_to_only_memories(only_memories, finished, state.name, store, settings.only_memories_url)
+        store.record_execution_success()
+        logger.info(
+            "run complete",
+            extra={
+                "fields": {
+                    "run_id": finished.id,
+                    "state_id": state.id,
+                    "next_state_id": next_state.id,
+                    "input_tokens": finished.input_tokens,
+                    "output_tokens": finished.output_tokens,
+                    "cost": finished.cost,
+                }
+            },
+        )
+        return TickResult(run=finished, previous_state=state, next_state=next_state, recap=recap)
+    except Exception as exc:
+        if "run" in locals():
+            store.fail_run(run.id, getattr(exc, "category", "execution_error"), str(exc))
+        if "definition" in locals():
+            store.record_execution_failure(definition.guardrails.loop_control)
+        logger.exception(
+            "run failed",
+            extra={
+                "fields": {
+                    "run_id": run.id if "run" in locals() else None,
+                    "state_id": state.id if "state" in locals() else None,
+                    "worker_id": owner,
+                    "error_category": getattr(exc, "category", "execution_error"),
+                }
+            },
+        )
+        raise
+    finally:
+        heartbeat.stop()
+        if not hold_lease:
+            store.release_lease(owner)
+
+
+def run_worker(database_path: Path | None = None) -> None:
+    settings = get_settings()
+    store = ConsciousnessStore(database_path or settings.database_path, execution_mode=settings.execution_mode)
+    store.setup()
+    worker_id = f"worker-{uuid.uuid4().hex[:10]}"
+    logger.info("worker started", extra={"fields": {"worker_id": worker_id, "database_path": str(store.database_path)}})
+    last_run_at = 0.0
+    try:
+        while True:
+            if not store.acquire_lease(worker_id, settings.worker_lease_seconds):
+                time.sleep(settings.worker_poll_seconds)
+                continue
+            store.renew_lease(worker_id, settings.worker_lease_seconds)
+            store.recover_stale_work(settings.worker_lease_seconds * 2)
+            _execute_approved_actions(store, settings)
+            command = store.claim_command()
+            if command:
+                try:
+                    _apply_command(store, command.kind)
+                    if command.kind == CommandKind.step:
+                        runtime = store.runtime()
+                        if runtime.backoff_until and runtime.backoff_until > utcnow():
+                            raise RuntimeError(f"execution backoff remains active until {runtime.backoff_until.isoformat()}")
+                        run_once(database_path, worker_id=worker_id, hold_lease=True)
+                    store.complete_command(command.id)
+                except Exception as exc:
+                    store.complete_command(command.id, str(exc))
+            runtime = store.runtime()
+            now = time.monotonic()
+            backoff_active = bool(runtime.backoff_until and runtime.backoff_until > utcnow())
+            if runtime.status in {RuntimeStatus.running, RuntimeStatus.degraded} and not backoff_active and now - last_run_at >= runtime.interval_seconds:
+                try:
+                    run_once(database_path, worker_id=worker_id, hold_lease=True)
+                    last_run_at = now
+                except Exception as exc:
+                    store.add_event("worker.tick_failed", {"error": str(exc)})
+                    last_run_at = now
+            time.sleep(settings.worker_poll_seconds)
+    finally:
+        store.release_lease(worker_id)
+
+
+def _apply_command(store: ConsciousnessStore, kind: CommandKind) -> None:
+    if kind in {CommandKind.run, CommandKind.resume}:
+        store.set_runtime_status(RuntimeStatus.running)
+    elif kind == CommandKind.pause:
+        store.set_runtime_status(RuntimeStatus.paused)
+    elif kind == CommandKind.stop:
+        store.set_runtime_status(RuntimeStatus.stopped)
+    elif kind == CommandKind.step:
+        store.set_runtime_status(RuntimeStatus.paused)
+
+
+def _publish_validated_changes(store: ConsciousnessStore, registry: ToolRegistry, run_id: str, policies) -> PublishReceipt:
+    proposals = [
+        run for run in store.list_runs(limit=30, state_id="curate")
+        if run.output and isinstance(run.output.payload, MemoryChangeProposal)
+    ]
+    if not proposals:
+        return PublishReceipt()
+    policy = next(policy for policy in policies if policy.state_id == "publish")
+    applied: list[str] = []
+    pending: list[str] = []
+    for index, change in enumerate(proposals[0].output.payload.changes):
+        tool_name = f"only_memories.{change.action}"
+        arguments = change.model_dump(exclude_none=True)
+        if change.action in {"remember", "supersede"}:
+            tool_name = "only_memories.remember"
+            arguments = {
+                "type": "artifact",
+                "content": change.content,
+                "source": "consciousness",
+                "metadata": {"origin_run_id": run_id, "reason": change.reason},
+            }
+            if change.action == "supersede" and change.memory_id:
+                arguments["supersedes_id"] = change.memory_id
+        execution = registry.execute(
+            run_id=run_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            policy=policy,
+            step_key=f"publish-{index}",
+        )
+        if execution.approval_id:
+            pending.append(execution.approval_id)
+        elif execution.result:
+            applied.append(str(execution.result.get("id") or tool_name))
+    return PublishReceipt(applied=applied, pending_approval_ids=pending)
+
+
+def _execute_approved_actions(store: ConsciousnessStore, settings: Settings) -> None:
+    approved = store.list_approvals(limit=20, status="approved")
+    if not approved:
+        return
+    only_memories = OnlyMemoriesClient(settings.only_memories_url) if settings.only_memories_url else None
+    registry = build_tool_registry(
+        store,
+        only_memories=only_memories,
+        artifacts=ArtifactStore(settings.artifact_root, store),
+    )
+    for approval in approved:
+        try:
+            if approval.kind == "tool_call":
+                call = store.get_tool_call_by_approval(approval.id)
+                registry.execute_approved(call)
+            elif approval.kind == "procedure_mutation":
+                store.activate_version(
+                    str(approval.proposed_action["version_id"]),
+                    rationale="approved auditor mutation",
+                    record_mutation=False,
+                )
+                store.mark_mutation_executed(str(approval.proposed_action["mutation_id"]))
+                store.mark_approval_executed(approval.id, "Approved procedure version activated by the worker.")
+        except Exception as exc:
+            store.add_event(
+                "approval.execution_failed",
+                {"approval_id": approval.id, "error": str(exc)},
+                run_id=approval.run_id,
+            )
+
+
+def _stage_audit_mutation(store: ConsciousnessStore, run_id: str, decision: AuditDecision) -> str | None:
+    if not decision.mutation_patch:
+        return None
+    draft = store.create_draft(created_by_run_id=run_id)
+    definition = apply_procedure_patch(draft.definition, decision.mutation_patch)
+    updated = store.update_draft(draft.id, definition, expected_revision=draft.revision)
+    errors = store.validate_version(updated.id)
+    if errors:
+        raise ValueError("auditor mutation produced an invalid procedure: " + "; ".join(errors))
+    _, approval = store.propose_mutation(
+        proposed_version_id=updated.id,
+        proposer_run_id=run_id,
+        rationale=decision.mutation_summary or "Auditor proposed a procedure mutation.",
+    )
+    return approval.id
+
+
+def _calculate_cost(input_rate: float, output_rate: float, input_tokens: int, output_tokens: int) -> float:
+    return round((input_tokens / 1_000_000) * input_rate + (output_tokens / 1_000_000) * output_rate, 8)
+
+
+def _add_recap(store: ConsciousnessStore, state_id: str, run_id: str, model_id: str, summary: str) -> AuditorRecap:
     return store.add_recap(
-        run_id=run.id,
-        auditor_model_id=model_id,
-        summary="Auditor pass found the starter procedure coherent. No mutation applied in scaffold mode.",
-        decision="continue_without_mutation",
+        run_id=run_id,
+        auditor_model_id=model_id if state_id == "audit" else "loop-recorder",
+        summary=summary,
+        decision="continue" if state_id != "audit" else "continue_without_mutation",
         procedure_changes=[],
     )
 
 
-def _check_only_memories(store: ConsciousnessStore, base_url: str | None) -> None:
-    if not base_url:
+def _check_only_memories(store: ConsciousnessStore, client: OnlyMemoriesClient | None, base_url: str | None) -> None:
+    if not client or not base_url:
+        store.upsert_integration(IntegrationStatus(name="only-memories", status="disabled", endpoint=None, last_checked_at=utcnow()))
         return
-    client = OnlyMemoriesClient(base_url)
     try:
         health = client.health()
-        store.upsert_integration(
-            IntegrationStatus(
-                name="only-memories",
-                status="healthy",
-                endpoint=base_url,
-                last_checked_at=utcnow(),
-                details=health,
-            )
-        )
-    except Exception as exc:  # pragma: no cover - depends on local sibling service
-        store.upsert_integration(
-            IntegrationStatus(
-                name="only-memories",
-                status="unreachable",
-                endpoint=base_url,
-                last_checked_at=utcnow(),
-                details={"error": str(exc)},
-            )
-        )
+        status = IntegrationStatus(name="only-memories", status="healthy", endpoint=base_url, last_checked_at=utcnow(), details=health)
+    except Exception as exc:
+        status = IntegrationStatus(name="only-memories", status="unreachable", endpoint=base_url, last_checked_at=utcnow(), details={"error": str(exc)})
+    store.upsert_integration(status)
 
 
-def _write_recap_to_only_memories(
-    base_url: str,
-    run,
-    state_name: str,
-    store: ConsciousnessStore,
-) -> None:
-    client = OnlyMemoriesClient(base_url)
+def _write_recap_to_only_memories(client: OnlyMemoriesClient, run, state_name: str, store: ConsciousnessStore, base_url: str | None) -> None:
     try:
         memory = client.remember_run_recap(run, state_name)
-        store.upsert_integration(
-            IntegrationStatus(
-                name="only-memories",
-                status="wrote_recap",
-                endpoint=base_url,
-                last_checked_at=utcnow(),
-                details={"memory_id": memory.get("id")},
-            )
-        )
-    except Exception as exc:  # pragma: no cover - depends on local sibling service
-        store.upsert_integration(
-            IntegrationStatus(
-                name="only-memories",
-                status="write_failed",
-                endpoint=base_url,
-                last_checked_at=utcnow(),
-                details={"error": str(exc)},
-            )
-        )
+        store.upsert_integration(IntegrationStatus(name="only-memories", status="wrote_recap", endpoint=base_url, last_checked_at=utcnow(), details={"memory_id": memory.get("id")}))
+    except Exception as exc:
+        store.upsert_integration(IntegrationStatus(name="only-memories", status="write_failed", endpoint=base_url, last_checked_at=utcnow(), details={"error": str(exc)}))
+
+
+def run_once_cli() -> None:
+    configure_structured_logging()
+    parser = argparse.ArgumentParser(description="Advance the consciousness loop once.")
+    parser.add_argument("--db", type=Path, default=None)
+    args = parser.parse_args()
+    print(run_once(args.db).model_dump_json(indent=2))
+
+
+def run_loop_cli() -> None:
+    configure_structured_logging()
+    parser = argparse.ArgumentParser(description="Run the durable consciousness worker.")
+    parser.add_argument("--db", type=Path, default=None)
+    args = parser.parse_args()
+    try:
+        run_worker(args.db)
+    except KeyboardInterrupt:
+        pass

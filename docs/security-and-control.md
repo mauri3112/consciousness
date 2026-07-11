@@ -36,3 +36,7 @@ Procedure mutations should be:
 Memory stores may contain private data. The default should be local-first. Remote model providers should receive only the minimum context required for the state, with source ids and summaries preferred over full raw archives.
 
 Structured run output should point to artifacts and sources instead of copying every large object into the run row. That preserves auditability while keeping context and storage pressure visible.
+
+## Local API Boundary
+
+The API binds to loopback by default and accepts only configured Studio origins. A non-loopback bind fails unless an API token is configured or the operator explicitly declares that a loopback-only reverse mapping provides the boundary. API/worker JSON logs and diagnostics recursively redact authorization, API-key, password, secret, cookie, and credential-token fields plus bearer/key-shaped values while retaining non-secret token-usage counters.

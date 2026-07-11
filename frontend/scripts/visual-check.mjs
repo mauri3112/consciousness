@@ -24,20 +24,23 @@ for (const target of [
   });
   page.on("pageerror", (error) => errors.push(`${target.name}: ${error.message}`));
 
-  await page.goto(url, { waitUntil: "networkidle" });
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.locator(".app-shell").waitFor({ state: "visible" });
   await page.screenshot({ path: target.path, fullPage: true });
 
   results.push({
     target: target.name,
-    currentText: await page.locator(".state-node.current").textContent(),
-    panelCount: await page.locator(".graph-panel, .inspector, .data-panel").count()
+    currentText: await page.locator(".procedure-node.current").textContent(),
+    panelCount: await page.locator(".graph-panel, .inspector, .data-panel").count(),
+    runtimeState: await page.locator(".runtime-summary strong").textContent(),
+    editorVisible: await page.getByRole("button", { name: "Editor", exact: true }).isVisible()
   });
   await page.close();
 }
 
 await browser.close();
 
-if (results.some((result) => !result.currentText || result.panelCount < 5) || errors.length > 0) {
+if (results.some((result) => !result.currentText || !result.runtimeState || (result.target === "desktop" && !result.editorVisible) || result.panelCount < 5) || errors.length > 0) {
   console.error(
     JSON.stringify(
       {

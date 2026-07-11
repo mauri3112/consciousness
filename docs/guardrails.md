@@ -13,6 +13,8 @@ Every state has a capability policy:
 
 The important distinction is between proposing a change and applying a change. A smart auditor may propose procedure mutation, but applied mutations should be versioned, diffed, budget-limited, and reversible.
 
+Local v1 uses bounded autonomy: validated additive only-memories writes and writes inside the configured artifact root may execute automatically. Forgetting, superseding, external filesystem writes, and procedure mutations become durable approval requests. The worker rechecks policy at execution time.
+
 ## Resilient Closed Loop
 
 "Always running" means restartable and self-throttling:
@@ -23,6 +25,8 @@ The important distinction is between proposing a change and applying a change. A
 - max consecutive failures,
 - daily budget cap,
 - degraded local-only mode.
+
+Runtime controls are durable commands processed only by the lease-owning worker. Pending high-risk approvals do not block read-only states from continuing.
 
 The loop should continue from durable state after restarts, but it should not spend or write endlessly when evidence says it is failing.
 

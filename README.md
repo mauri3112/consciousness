@@ -2,6 +2,8 @@
 
 Consciousness is an always-running procedural loop for LLM agents.
 
+The active production roadmap and resumable task ledger live in [`docs/implementation-plan.md`](docs/implementation-plan.md).
+
 The project defines a strongly connected directed graph of agent states. One agent runs at a time. Each state owns a domain, goal, prompt contract, tools, skills, context budget, model policy, and output contract. When a state finishes, it writes a visible durable result so the next state, an auditor, or a restarted process can continue from the last known point.
 
 This is an agent harness, not a claim about machine sentience. The name intentionally teases a different angle on intelligence: not a single brilliant answer, but a durable loop that can notice its own state, conserve context, choose cheaper or stronger models, change procedure, and leave evidence for the next mind-state to inherit.
@@ -36,14 +38,14 @@ The two projects are designed to work together, but neither one should require t
 - A DB is necessary but not enough. Runs can point to stable artifact/source links so large files, code diffs, generated assets, and only-memories writes can stay inspectable without stuffing everything into one row.
 - The name is a provocation, and that is fine. The project should use it to discuss intelligence as stateful self-governance, memory stewardship, budgeted model choice, and procedural adaptation rather than pretending the harness is sentient.
 
-## Current Scaffold
+## Current Local v1 Foundation
 
 - Python FastAPI backend.
-- SQLite store for procedure states, transitions, model profiles, runs, auditor recaps, mutations, and integration status.
-- Deterministic single-tick runner that advances the loop and records final thoughts plus structured evidence output.
-- Guardrail policies for state capabilities, loop control, and evidence requirements.
-- Optional only-memories HTTP adapter.
-- React + Vite studio that visualizes the current graph, state inspector, recaps, model budget, tools, skills, and integration health.
+- Ordered SQLite migrations, immutable procedure versions, durable runtime commands, a renewable worker lease, run events, approvals, artifacts, usage, and rollback records.
+- Provider-neutral execution with explicit preview mode plus live OpenAI Responses and Ollama adapters.
+- Guardrail-enforced tools and bounded automatic publishing for validated additive memory writes.
+- Optional only-memories HTTP adapter covering search, navigation, versions, writes, forgetting, restore, and connection reinforcement.
+- React + Vite operator Studio with live controls, run evidence, approvals, mutation history, and visual procedure drafting.
 - Example starter procedure and model registry.
 - Docker Compose, CI, and tests.
 
@@ -61,6 +63,12 @@ consciousness-api
 
 The API runs at `http://localhost:8770`.
 
+In a second backend shell, start the only process allowed to execute states:
+
+```bash
+consciousness-worker
+```
+
 Frontend:
 
 ```bash
@@ -71,19 +79,19 @@ npm run dev
 
 The studio runs at `http://localhost:5173`.
 
-Advance the loop once:
+Queue one durable step through the API:
 
 ```bash
-cd backend
-consciousness-tick
+curl -X POST http://localhost:8770/api/v1/control/step
 ```
 
-Run the durable loop:
+Run continuously:
 
 ```bash
-cd backend
-consciousness-loop
+curl -X POST http://localhost:8770/api/v1/control/run
 ```
+
+`CONSCIOUSNESS_EXECUTION_MODE=preview` is explicit and requires no provider. Set it to `live`, configure `OPENAI_API_KEY` or `OLLAMA_URL`, and update the model registry before live execution.
 
 Docker:
 
@@ -112,7 +120,6 @@ consciousness/
     src/
       App.tsx
       api.ts
-      sampleData.ts
       styles.css
   docs/
     architecture.md
@@ -132,10 +139,12 @@ consciousness/
 
 ```bash
 curl http://localhost:8770/health
-curl http://localhost:8770/procedure
-curl http://localhost:8770/guardrails
-curl -X POST http://localhost:8770/tick
+curl http://localhost:8770/api/v1/procedure
+curl http://localhost:8770/api/v1/runtime
+curl -X POST http://localhost:8770/api/v1/control/step
 ```
+
+Maintenance commands: `consciousness-backup`, `consciousness-diagnostics`, and `consciousness-vacuum`. API and worker entrypoints emit JSON logs with request/run identifiers and recursive credential redaction; diagnostics use the same redaction policy while preserving token-usage metrics.
 
 ## Open Source Success Criteria
 

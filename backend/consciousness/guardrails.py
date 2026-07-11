@@ -26,7 +26,7 @@ def default_guardrails() -> GuardrailSnapshot:
             ),
             CapabilityPolicy(
                 state_id="synthesize",
-                allowed_tool_patterns=["only_memories.remember", "filesystem.write"],
+                allowed_tool_patterns=["artifact.write"],
                 mutation_level="artifact_write",
                 requires_approval=False,
                 rationale="Synthesize writes bridge artifacts and must preserve source links.",
@@ -40,7 +40,13 @@ def default_guardrails() -> GuardrailSnapshot:
             ),
             CapabilityPolicy(
                 state_id="publish",
-                allowed_tool_patterns=["only_memories.remember", "filesystem.write", "git.diff"],
+                allowed_tool_patterns=[
+                    "only_memories.remember",
+                    "only_memories.forget",
+                    "only_memories.restore",
+                    "only_memories.reinforce",
+                    "artifact.write",
+                ],
                 mutation_level="accepted_write",
                 requires_approval=True,
                 rationale="Publish makes accepted changes visible and should record rollback links.",

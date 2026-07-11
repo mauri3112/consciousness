@@ -2,6 +2,8 @@
 
 This repo is the orchestration layer for a durable, always-running agent loop.
 
+Use `docs/implementation-plan.md` as the authoritative implementation ledger. Update task status and completion evidence there whenever a milestone changes.
+
 ## Local Rules
 
 - Keep `only-memories` as an optional sibling integration. Do not edit `../only-memories` from this repo unless the user explicitly asks.
