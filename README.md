@@ -1,12 +1,51 @@
 # Consciousness
 
-Consciousness is an always-running procedural loop for LLM agents.
+**A local-first agent harness for durable, long-running work.**
 
-The active production roadmap and resumable task ledger live in [`docs/implementation-plan.md`](docs/implementation-plan.md). Installation, upgrades, recovery, and the release checklist are in [`docs/operator-runbook.md`](docs/operator-runbook.md). Reusable coding, research, browser, data, memory, and governance capability envelopes are documented in [`docs/access-presets.md`](docs/access-presets.md).
+[![CI](https://github.com/mauri3112/consciousness/actions/workflows/ci.yml/badge.svg)](https://github.com/mauri3112/consciousness/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-72f1b8.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](backend/pyproject.toml)
+[![React](https://img.shields.io/badge/Studio-React-61DAFB.svg?logo=react&logoColor=111)](frontend)
 
-The project defines a strongly connected directed graph of agent states. One agent runs at a time. Each state owns a domain, goal, prompt contract, tools, skills, context budget, model policy, and output contract. When a state finishes, it writes a visible durable result so the next state, an auditor, or a restarted process can continue from the last known point.
+![Consciousness Studio showing a live six-state memory stewardship procedure](docs/assets/studio-live.jpg)
 
-This is an agent harness, not a claim about machine sentience. The name intentionally teases a different angle on intelligence: not a single brilliant answer, but a durable loop that can notice its own state, conserve context, choose cheaper or stronger models, change procedure, and leave evidence for the next mind-state to inherit.
+Consciousness coordinates local LLMs and external providers inside user-configurable, strongly connected directed graphs. Each state is a focused agent with its own goal, prompt contract, tools, skills, context budget, model policy, and structured output. Routine work can stay local; demanding states can use stronger models when the evidence or context requirements justify it.
+
+The loop is durable rather than chat-shaped. Every run, transition, model choice, tool call, artifact, approval, and procedure version is recorded in SQLite. A process can crash, restart, or change models without losing the last committed state. A stronger auditor can evaluate the work and propose improvements to prompts, tools, models, guardrails, or graph topology without silently rewriting its own history.
+
+> This is an agent harness, not a claim about machine sentience. The name explores a different angle on intelligence: a system that can inspect its state, preserve evidence, manage context, adapt its procedure, and hand durable work to the next agent.
+
+## Why It Is Different
+
+| Principle | What it means |
+| --- | --- |
+| **Local-first, provider-neutral** | Use Ollama for private or routine work, OpenAI for stronger states, or add another provider adapter. Models are selected per state rather than baked into the workflow. |
+| **Graphs, not fixed chains** | Validation can reopen synthesis, an audit can route back to gathering, and failures can take explicit recovery paths. |
+| **Durable by default** | SQLite-backed commands, leases, checkpoints, recaps, artifacts, and immutable procedure versions make every transition restartable and inspectable. |
+| **Bounded autonomy** | Each state receives a narrow capability envelope. Risky writes are approval-gated; procedure mutations are versioned, diffed, policy-checked, and reversible. |
+| **A stronger auditor, not stronger everything** | Cheaper local agents can do routine work while a capable auditor monitors quality, model fit, context pressure, failures, and budgets. |
+
+## How It Works
+
+```mermaid
+flowchart LR
+  operator[Operator-defined procedure] --> state[Run one agent state]
+  state --> evidence[Persist evidence and outputs]
+  evidence --> transition{Evaluate transition}
+  transition --> state
+  evidence --> audit[Audit quality, cost, and model fit]
+  audit -. propose versioned changes .-> operator
+```
+
+One state runs at a time by default, keeping causality and write ownership understandable. The active procedure decides what follows; the database preserves why. Every state records its model, context usage, resolved capabilities, sources, changed resources, unresolved risks, final thoughts, and next-transition recommendation.
+
+The bundled memory-stewardship procedure demonstrates the full loop:
+
+**Gather → Curate → Synthesize → Validate → Publish → Audit → Gather**
+
+The same pattern can support research, coding, operations, personal knowledge, or any long-running process where agents should leave inspectable evidence for the next agent.
+
+The active roadmap and resumable task ledger live in [`docs/implementation-plan.md`](docs/implementation-plan.md). Installation, upgrades, recovery, and release checks are in [`docs/operator-runbook.md`](docs/operator-runbook.md). Reusable capability envelopes are documented in [`docs/access-presets.md`](docs/access-presets.md).
 
 ## Why This Exists
 
@@ -21,7 +60,7 @@ This is an agent harness, not a claim about machine sentience. The name intentio
 
 The two projects are designed to work together, but neither one should require the other to boot. Consciousness integrates with only-memories through HTTP/MCP contracts and can run with a local SQLite store by itself.
 
-## What Is Gold
+## Design Principles
 
 - Durable agent state is the right primitive. Agent runs crash, context fills, and models change. The loop should survive all of that through DB-backed runs, recaps, procedure versions, and output artifacts.
 - A graph ceremony is stronger than a linear cron job. Memory care needs feedback loops: audit can return to gather, validation can reopen synthesis, and budget pressure can choose simpler paths.
@@ -30,7 +69,7 @@ The two projects are designed to work together, but neither one should require t
 - A smart auditor should optimize the procedure, not just judge outputs. It can downgrade models, remove useless states, add tools, tighten prompts, or escalate to a stronger model when evidence says the current loop is failing.
 - Model choice should be a budgeted policy decision. The simplest model that can reliably finish the state should win.
 
-## What Needs Guardrails
+## Safety Model
 
 - "Full control" for the smart model is too broad without capability boundaries. Consciousness now has explicit capability policies per state and treats procedure mutation as a versioned, diffed, budget-limited proposal before it becomes applied control.
 - "Never stop" should mean resilient, not reckless. The loop control policy includes manual pause, backoff, sleep-window intent, consecutive-failure limits, daily spend caps, health checks, and degraded local-only mode.
@@ -52,7 +91,23 @@ The two projects are designed to work together, but neither one should require t
 
 ## Quick Start
 
-Backend:
+### Docker Compose
+
+No paid provider key is required for preview mode:
+
+```bash
+git clone https://github.com/mauri3112/consciousness.git
+cd consciousness
+docker compose up --build
+```
+
+Open the Studio at `http://localhost:5174`. The API is available at `http://localhost:8770`.
+
+Compose reaches Ollama and only-memories on the host through `host.docker.internal`; local-process settings in `.env.example` intentionally do not override those container URLs. Use `.env.compose.example` as the template when Compose-specific URL overrides are needed. When `CONSCIOUSNESS_API_TOKEN` is set, the Studio's same-origin proxy adds it server-side for normal requests, live SSE updates, and procedure export. The credential is not embedded in the browser bundle.
+
+### Run From Source
+
+Start the backend API:
 
 ```bash
 cd backend
@@ -62,15 +117,13 @@ pip install -e ".[dev]"
 consciousness-api
 ```
 
-The API runs at `http://localhost:8770`.
-
 In a second backend shell, start the only process allowed to execute states:
 
 ```bash
 consciousness-worker
 ```
 
-Frontend:
+Start the frontend:
 
 ```bash
 cd frontend
@@ -78,7 +131,7 @@ npm install
 npm run dev
 ```
 
-The studio runs at `http://localhost:5173`.
+The development Studio runs at `http://localhost:5173`.
 
 Queue one durable step through the API:
 
@@ -93,19 +146,6 @@ curl -X POST http://localhost:8770/api/v1/control/run
 ```
 
 `CONSCIOUSNESS_EXECUTION_MODE=preview` is explicit and requires no provider. For the bundled local profile, run `ollama pull qwen3.5:9b`, set the mode to `live`, and make sure `OLLAMA_URL` is reachable. OpenAI execution additionally requires `OPENAI_API_KEY` and operator-confirmed model rows.
-
-Docker:
-
-```bash
-docker compose up --build
-```
-
-Docker serves the studio at `http://localhost:5174` and the API at `http://localhost:8770`.
-Compose reaches Ollama and only-memories on the host through `host.docker.internal`; local-process
-settings in `.env.example` intentionally do not override those container URLs. Use
-`.env.compose.example` as the template when Compose-specific URL overrides are needed.
-When `CONSCIOUSNESS_API_TOKEN` is set, the Studio's same-origin proxy adds it server-side for normal
-requests, live SSE updates, and procedure export. The credential is not embedded in the browser bundle.
 
 For a repeatable live Ollama cycle against the normal persistent Compose volume:
 
@@ -173,3 +213,11 @@ Ollama enforcement, and paired SQLite backups, follow
 Consciousness becomes useful when a new operator can install it locally, see the current loop, understand why each agent ran, inspect every procedure mutation, plug in open or closed models, enforce budgets, and connect it to only-memories without reading the source code first.
 
 The project should make the invisible parts of agent orchestration visible: what state ran, what model was chosen, what context it saw, what it changed, how the auditor judged it, and why the next state follows.
+
+## Contributing
+
+Consciousness is early and actively evolving. Issues, design critiques, provider adapters, tools, access presets, procedures, tests, and Studio improvements are welcome.
+
+Before making a substantial change, start with [`docs/architecture.md`](docs/architecture.md), [`docs/guardrails.md`](docs/guardrails.md), and the current [`implementation plan`](docs/implementation-plan.md). The central constraint is simple: autonomy should become more useful without becoming less inspectable.
+
+Licensed under the [MIT License](LICENSE).
