@@ -2,7 +2,7 @@
 
 Consciousness is an always-running procedural loop for LLM agents.
 
-The active production roadmap and resumable task ledger live in [`docs/implementation-plan.md`](docs/implementation-plan.md). Installation, upgrades, recovery, and the release checklist are in [`docs/operator-runbook.md`](docs/operator-runbook.md).
+The active production roadmap and resumable task ledger live in [`docs/implementation-plan.md`](docs/implementation-plan.md). Installation, upgrades, recovery, and the release checklist are in [`docs/operator-runbook.md`](docs/operator-runbook.md). Reusable coding, research, browser, data, memory, and governance capability envelopes are documented in [`docs/access-presets.md`](docs/access-presets.md).
 
 The project defines a strongly connected directed graph of agent states. One agent runs at a time. Each state owns a domain, goal, prompt contract, tools, skills, context budget, model policy, and output contract. When a state finishes, it writes a visible durable result so the next state, an auditor, or a restarted process can continue from the last known point.
 
@@ -44,6 +44,7 @@ The two projects are designed to work together, but neither one should require t
 - Ordered SQLite migrations, immutable procedure versions, durable runtime commands, a renewable worker lease, run events, approvals, artifacts, usage, and rollback records.
 - Provider-neutral execution with explicit preview mode plus live OpenAI Responses and Ollama adapters.
 - Guardrail-enforced tools and bounded automatic publishing for validated additive memory writes.
+- Versioned agent access presets with structured filesystem, shell, network, external-write, and secret permissions; every run pins its resolved tools and skills.
 - Optional only-memories HTTP adapter covering search, navigation, versions, writes, forgetting, restore, and connection reinforcement.
 - React + Vite operator Studio with live controls, run evidence, approvals, mutation history, and visual procedure drafting.
 - Example starter procedure and model registry.
@@ -162,6 +163,10 @@ curl -X POST http://localhost:8770/api/v1/control/step
 ```
 
 Maintenance commands: `consciousness-backup`, `consciousness-diagnostics`, and `consciousness-vacuum`. API and worker entrypoints emit JSON logs with request/run identifiers and recursive credential redaction; diagnostics use the same redaction policy while preserving token-usage metrics.
+
+For a restartable local memory-curation soak test with timed fixtures, ranking snapshots, single-model
+Ollama enforcement, and paired SQLite backups, follow
+[`docs/memory-stewardship-experiment.md`](docs/memory-stewardship-experiment.md).
 
 ## Open Source Success Criteria
 

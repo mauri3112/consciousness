@@ -220,6 +220,7 @@ RUN_COLUMNS: dict[str, str] = {
     "cached_tokens": "INTEGER NOT NULL DEFAULT 0",
     "cost": "REAL NOT NULL DEFAULT 0",
     "context_manifest_json": "TEXT NOT NULL DEFAULT '{}'",
+    "agent_access_json": "TEXT NOT NULL DEFAULT '{}'",
     "heartbeat_at": "TEXT",
     "error_category": "TEXT",
     "error_message": "TEXT",
@@ -238,9 +239,16 @@ def _migration_2(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {declaration}")
 
 
+def _migration_3(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    if "agent_access_json" not in existing:
+        conn.execute("ALTER TABLE runs ADD COLUMN agent_access_json TEXT NOT NULL DEFAULT '{}'")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "bootstrap scaffold schema", _migration_1),
     (2, "durable local v1 runtime and evidence", _migration_2),
+    (3, "pin resolved agent access on every run", _migration_3),
 ]
 
 
@@ -254,12 +262,19 @@ def migrate(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    applied = {row[0] for row in conn.execute("SELECT version FROM schema_migrations").fetchall()}
-    for version, name, migration in MIGRATIONS:
-        if version in applied:
-            continue
-        migration(conn)
-        conn.execute(
-            "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, datetime('now'))",
-            (version, name),
-        )
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        applied = {row[0] for row in conn.execute("SELECT version FROM schema_migrations").fetchall()}
+        for version, name, migration in MIGRATIONS:
+            if version in applied:
+                continue
+            migration(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, datetime('now'))",
+                (version, name),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise

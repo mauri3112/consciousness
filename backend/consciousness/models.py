@@ -49,6 +49,61 @@ class ApprovalStatus(StrEnum):
     executed = "executed"
 
 
+class PermissionPolicy(BaseModel):
+    filesystem: Literal["none", "read_only", "workspace_write", "unrestricted"] = "none"
+    shell: Literal["none", "read_only", "workspace_write", "unrestricted"] = "none"
+    network: Literal["none", "restricted", "unrestricted"] = "none"
+    external_writes: Literal["deny", "ask", "allow"] = "deny"
+    secrets: Literal["deny", "ask", "allow"] = "deny"
+
+
+class AgentAccessPreset(BaseModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    agent_type: str = Field(min_length=1)
+    permissions: PermissionPolicy = Field(default_factory=PermissionPolicy)
+    tools: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    allowed_tool_patterns: list[str] = Field(default_factory=list)
+    mutation_level: str = "read_only"
+    requires_approval: bool = False
+    rationale: str = Field(min_length=1)
+    built_in: bool = False
+
+
+class AccessOverrides(BaseModel):
+    add_tools: list[str] = Field(default_factory=list)
+    remove_tools: list[str] = Field(default_factory=list)
+    add_skills: list[str] = Field(default_factory=list)
+    remove_skills: list[str] = Field(default_factory=list)
+    add_allowed_tool_patterns: list[str] = Field(default_factory=list)
+    remove_allowed_tool_patterns: list[str] = Field(default_factory=list)
+    permissions: PermissionPolicy | None = None
+    mutation_level: str | None = None
+    requires_approval: bool | None = None
+    rationale: str | None = None
+
+
+class ResolvedStateAccess(BaseModel):
+    state_id: str
+    preset_id: str | None = None
+    permissions: PermissionPolicy = Field(default_factory=PermissionPolicy)
+    tools: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    allowed_tool_patterns: list[str] = Field(default_factory=list)
+    mutation_level: str
+    requires_approval: bool
+    rationale: str
+
+
+class ToolDescriptor(BaseModel):
+    name: str
+    description: str
+    mutation_level: str
+    idempotent: bool
+
+
 class ProcedureState(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
     name: str = Field(min_length=1)
@@ -59,6 +114,8 @@ class ProcedureState(BaseModel):
     output_contract: str = Field(min_length=1)
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
+    access_preset_id: str | None = None
+    access_overrides: AccessOverrides = Field(default_factory=AccessOverrides)
     context_minimum: int = Field(default=32_768, ge=1)
     output_reserve: int = Field(default=4_096, ge=256)
     model_policy: str = "cheap-capable"
@@ -130,6 +187,7 @@ class GuardrailSnapshot(BaseModel):
 
 class ProcedureDefinition(BaseModel):
     name: str = "Research Loop"
+    access_presets: list[AgentAccessPreset] = Field(default_factory=list)
     states: list[ProcedureState]
     transitions: list[Transition]
     models: list[ModelProfile]
@@ -280,6 +338,7 @@ class RunRecord(BaseModel):
     cached_tokens: int = 0
     cost: float = 0
     context_manifest: ContextManifest = Field(default_factory=ContextManifest)
+    agent_access: ResolvedStateAccess | None = None
     started_at: datetime
     heartbeat_at: datetime | None = None
     finished_at: datetime | None = None
@@ -406,6 +465,7 @@ class ProcedureSnapshot(BaseModel):
     recaps: list[AuditorRecap]
     integrations: list[IntegrationStatus]
     guardrails: GuardrailSnapshot
+    resolved_access: list[ResolvedStateAccess] = Field(default_factory=list)
     approvals: list[ApprovalRecord] = Field(default_factory=list)
     mutations: list[ProcedureMutation] = Field(default_factory=list)
 

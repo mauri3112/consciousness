@@ -62,5 +62,47 @@ services:
       timeout: 3s
       retries: 6
 
+  experiment:
+    profiles: ["experiment"]
+    build:
+      context: ./backend
+    command: ["consciousness-memory-experiment", "run"]
+    restart: "on-failure:5"
+    environment:
+      EXPERIMENT_ID: ${EXPERIMENT_ID:-memory-stewardship-v1}
+      EXPERIMENT_DURATION_SECONDS: ${EXPERIMENT_DURATION_SECONDS:-28800}
+      EXPERIMENT_BACKUP_INTERVAL_SECONDS: ${EXPERIMENT_BACKUP_INTERVAL_SECONDS:-1800}
+      EXPERIMENT_SNAPSHOT_INTERVAL_SECONDS: ${EXPERIMENT_SNAPSHOT_INTERVAL_SECONDS:-900}
+      EXPERIMENT_POLL_SECONDS: ${EXPERIMENT_POLL_SECONDS:-15}
+      EXPERIMENT_REQUIRED_MODEL: ${EXPERIMENT_REQUIRED_MODEL:-qwen3.5:9b}
+      EXPERIMENT_AGENT_INTERVAL_SECONDS: ${CONSCIOUSNESS_LOOP_INTERVAL_SECONDS:-300}
+      EXPERIMENT_OUTPUT_ROOT: /experiments
+      EXPERIMENT_FIXTURE_PATH: /fixtures/fixtures.json
+      EXPERIMENT_CONSCIOUSNESS_DB: /source/consciousness/consciousness.db
+      EXPERIMENT_ONLY_MEMORIES_DB: /source/only-memories/only-memories.sqlite3
+      CONSCIOUSNESS_API_URL: http://api:8770
+      ONLY_MEMORIES_URL: ${COMPOSE_ONLY_MEMORIES_URL:-http://host.docker.internal:8765}
+      OLLAMA_URL: ${COMPOSE_OLLAMA_URL:-http://host.docker.internal:11434}
+      CONSCIOUSNESS_API_TOKEN: ${CONSCIOUSNESS_API_TOKEN:-}
+    volumes:
+      - consciousness-data:/source/consciousness:ro
+      - only-memories-data:/source/only-memories:ro
+      - ./experiments/memory-stewardship-v1:/fixtures:ro
+      - ./data/experiments:/experiments
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "consciousness-memory-experiment", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+
 volumes:
   consciousness-data:
+  only-memories-data:
+    external: true
+    name: only-memories_only_memories_data

@@ -34,6 +34,7 @@ consciousness-backup = "consciousness.maintenance:backup_cli"
 consciousness-diagnostics = "consciousness.maintenance:diagnostics_cli"
 consciousness-vacuum = "consciousness.maintenance:vacuum_cli"
 consciousness-upgrade-bundled-profile = "consciousness.maintenance:upgrade_bundled_profile_cli"
+consciousness-memory-experiment = "consciousness.experiment:experiment_cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["consciousness"]

@@ -46,11 +46,25 @@ def test_store_reconciles_execution_mode_when_reopening_database(tmp_path):
     ]) == 1
 
 
+def test_runtime_interval_update_is_durable_and_audited(tmp_path):
+    database_path = tmp_path / "interval.db"
+    store = ConsciousnessStore(database_path)
+    store.setup()
+
+    runtime = store.set_runtime_interval(300)
+
+    assert runtime.interval_seconds == 300
+    assert ConsciousnessStore(database_path).runtime().interval_seconds == 300
+    event = next(item for item in store.list_events(limit=20) if item.event_type == "runtime.interval")
+    assert event.payload == {"previous_seconds": 60, "current_seconds": 300}
+
+
 def test_bundled_profile_upgrade_is_versioned_audited_and_idempotent(tmp_path):
     store = ConsciousnessStore(tmp_path / "consciousness.db")
     store.setup()
     draft = store.create_draft()
     definition = draft.definition.model_copy(deep=True)
+    definition.access_presets = []
     next(state for state in definition.states if state.id == "curate").tools = [
         "only_memories.reinforce_connection"
     ]
@@ -74,6 +88,7 @@ def test_bundled_profile_upgrade_is_versioned_audited_and_idempotent(tmp_path):
         "only_memories.versions",
     ]
     assert "local/qwen3.5-9b" in {model.id for model in upgraded.definition.models}
+    assert "coding-agent" in {preset.id for preset in upgraded.definition.access_presets}
     assert "local/llama-3.1-8b-instruct" not in {model.id for model in upgraded.definition.models}
     assert len(store.list_mutations()) == mutations_before + 1
     assert len(store.list_recaps()) == recaps_before + 1

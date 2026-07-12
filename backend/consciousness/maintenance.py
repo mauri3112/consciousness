@@ -10,6 +10,7 @@ from .config import get_settings
 from .guardrails import default_guardrails
 from .models import ModelProfile, ProcedureVersion
 from .operations import redact
+from .presets import built_in_access_presets
 from .seed import STARTER_MODELS, STARTER_STATES
 from .store import ConsciousnessStore
 
@@ -65,6 +66,11 @@ def upgrade_bundled_profile(store: ConsciousnessStore) -> ProcedureVersion | Non
     definition = active.definition.model_copy(deep=True)
     runtime = store.runtime()
     changes: list[dict[str, object]] = []
+    existing_preset_ids = {preset.id for preset in definition.access_presets}
+    added_presets = [preset for preset in built_in_access_presets() if preset.id not in existing_preset_ids]
+    if added_presets:
+        definition.access_presets.extend(added_presets)
+        changes.append({"kind": "access-presets", "preset_ids": [preset.id for preset in added_presets]})
     starter_states = {str(item["id"]): item for item in STARTER_STATES}
     for state in definition.states:
         state.is_current = state.id == runtime.current_state_id
@@ -99,12 +105,12 @@ def upgrade_bundled_profile(store: ConsciousnessStore) -> ProcedureVersion | Non
         raise RuntimeError("bundled profile upgrade is invalid: " + "; ".join(errors))
     activated = store.activate_version(
         updated.id,
-        rationale="upgrade bundled only-memories safety and local Ollama profile",
+        rationale="upgrade bundled safety, agent access presets, and local Ollama profile",
     )
     store.add_recap(
         run_id=None,
         auditor_model_id="operator-maintenance",
-        summary="Applied bundled only-memories safety and qwen3.5:9b profile to the persistent procedure.",
+        summary="Applied bundled safety, agent access presets, and qwen3.5:9b profile to the persistent procedure.",
         decision="activate_version",
         procedure_changes=changes,
     )

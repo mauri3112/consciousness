@@ -6,6 +6,7 @@ import hashlib
 import json
 import random
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ from .models import (
     RunOutput,
     RunRecord,
     RunStatus,
+    ResolvedStateAccess,
     RuntimeCommand,
     RuntimeState,
     RuntimeStatus,
@@ -39,6 +41,7 @@ from .models import (
     ToolCallRecord,
     Transition,
 )
+from .presets import built_in_access_presets, resolve_state_access
 from .seed import STARTER_MODELS, STARTER_STATES, STARTER_TRANSITIONS
 
 
@@ -92,12 +95,21 @@ class ConsciousnessStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA journal_mode = WAL")
+        for attempt in range(5):
+            try:
+                conn.execute("PRAGMA journal_mode = WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 4:
+                    conn.close()
+                    raise
+                time.sleep(0.05 * (attempt + 1))
         return conn
 
     def setup(self) -> None:
         with self.connect() as conn:
             migrate(conn)
+            conn.execute("BEGIN IMMEDIATE")
             self._seed_if_empty(conn)
             runtime = conn.execute(
                 "SELECT execution_mode FROM procedure_runtime WHERE singleton = 1"
@@ -137,6 +149,7 @@ class ConsciousnessStore:
             recaps=self.list_recaps(limit=50),
             integrations=self.list_integrations(),
             guardrails=definition.guardrails,
+            resolved_access=[resolve_state_access(definition, state) for state in states],
             approvals=self.list_approvals(limit=50),
             mutations=self.list_mutations(limit=50),
         )
@@ -316,6 +329,26 @@ class ConsciousnessStore:
                 (status.value, utcnow().isoformat()),
             )
         self.add_event("runtime.status", {"status": status.value})
+        return self.runtime()
+
+    def set_runtime_interval(self, interval_seconds: int) -> RuntimeState:
+        if interval_seconds < 1 or interval_seconds > 86_400:
+            raise ValueError("runtime interval must be between 1 and 86400 seconds")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT interval_seconds FROM procedure_runtime WHERE singleton = 1"
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("procedure runtime is not initialized")
+            previous = int(row["interval_seconds"])
+            conn.execute(
+                "UPDATE procedure_runtime SET interval_seconds = ?, updated_at = ? WHERE singleton = 1",
+                (interval_seconds, utcnow().isoformat()),
+            )
+        self.add_event(
+            "runtime.interval",
+            {"previous_seconds": previous, "current_seconds": interval_seconds},
+        )
         return self.runtime()
 
     def enqueue_command(self, kind: CommandKind, payload: dict[str, Any] | None = None) -> RuntimeCommand:
@@ -530,7 +563,7 @@ class ConsciousnessStore:
 
     # Runs and evidence --------------------------------------------------
 
-    def begin_run(self, state: ProcedureState, model: ModelProfile, *, attempt: int = 1, manifest: ContextManifest | None = None) -> RunRecord:
+    def begin_run(self, state: ProcedureState, model: ModelProfile, *, attempt: int = 1, manifest: ContextManifest | None = None, agent_access: ResolvedStateAccess | None = None) -> RunRecord:
         now = utcnow()
         version = self.current_version()
         run_id = make_id("run")
@@ -541,9 +574,9 @@ class ConsciousnessStore:
                 INSERT INTO runs(
                   id, state_id, procedure_version_id, goal, status, attempt, model_id,
                   provider, context_window, context_used, input_tokens, output_tokens,
-                  cached_tokens, cost, context_manifest_json, started_at, heartbeat_at,
+                  cached_tokens, cost, context_manifest_json, agent_access_json, started_at, heartbeat_at,
                   finished_at, final_thoughts, changes_json, output_json
-                ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, NULL, NULL, '[]', '{}')
+                ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?, NULL, NULL, '[]', '{}')
                 """,
                 (
                     run_id,
@@ -555,6 +588,7 @@ class ConsciousnessStore:
                     model.provider,
                     model.context_window,
                     context_manifest.model_dump_json(),
+                    agent_access.model_dump_json() if agent_access else "{}",
                     now.isoformat(),
                     now.isoformat(),
                 ),
@@ -1169,7 +1203,7 @@ class ConsciousnessStore:
             )
             for row in conn.execute("SELECT * FROM model_profiles").fetchall()
         ]
-        return ProcedureDefinition(name="Research Loop", states=states, transitions=transitions, models=models, guardrails=default_guardrails())
+        return ProcedureDefinition(name="Research Loop", access_presets=built_in_access_presets(), states=states, transitions=transitions, models=models, guardrails=default_guardrails())
 
 
 def _starter_definition() -> ProcedureDefinition:
@@ -1186,7 +1220,7 @@ def _starter_definition() -> ProcedureDefinition:
         for source, target, weight, rationale in STARTER_TRANSITIONS
     ]
     models = [ModelProfile(**model) for model in STARTER_MODELS]
-    return ProcedureDefinition(name="Research Loop", states=states, transitions=transitions, models=models, guardrails=default_guardrails())
+    return ProcedureDefinition(name="Research Loop", access_presets=built_in_access_presets(), states=states, transitions=transitions, models=models, guardrails=default_guardrails())
 
 
 def _serialize_definition(definition: ProcedureDefinition) -> tuple[str, str]:
@@ -1229,6 +1263,7 @@ def _runtime_from_row(row: sqlite3.Row) -> RuntimeState:
 def _run_from_row(row: sqlite3.Row, *, fallback_version_id: str) -> RunRecord:
     output_payload = _load(row["output_json"], {})
     manifest_payload = _load(row["context_manifest_json"], {}) if "context_manifest_json" in row.keys() else {}
+    access_payload = _load(row["agent_access_json"], {}) if "agent_access_json" in row.keys() else {}
     return RunRecord(
         id=row["id"],
         state_id=row["state_id"],
@@ -1246,6 +1281,7 @@ def _run_from_row(row: sqlite3.Row, *, fallback_version_id: str) -> RunRecord:
         cached_tokens=row["cached_tokens"],
         cost=row["cost"],
         context_manifest=ContextManifest(**manifest_payload) if manifest_payload else ContextManifest(),
+        agent_access=ResolvedStateAccess(**access_payload) if access_payload else None,
         started_at=_dt(row["started_at"]) or utcnow(),
         heartbeat_at=_dt(row["heartbeat_at"]),
         finished_at=_dt(row["finished_at"]),

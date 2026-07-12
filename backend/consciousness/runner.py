@@ -33,6 +33,7 @@ from .only_memories import OnlyMemoriesClient
 from .operations import configure_structured_logging
 from .providers import ProviderError, ProviderRequest, ProviderTool, build_provider
 from .procedure_patch import apply_procedure_patch
+from .presets import apply_resolved_access, resolve_state_access, resolved_policy
 from .store import ConsciousnessStore, utcnow
 from .tools import ToolRegistry, build_tool_registry
 
@@ -124,6 +125,8 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
             raise RuntimeError(f"execution backoff remains active until {runtime.backoff_until.isoformat()}")
         definition = store.current_version().definition
         state = store.current_state()
+        access = resolve_state_access(definition, state)
+        state = apply_resolved_access(state, access)
         local_only = runtime.status == RuntimeStatus.degraded or store.daily_spend() >= runtime.daily_budget_cap
         model = choose_model(
             state,
@@ -153,7 +156,7 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
             manifest = build_context_manifest(state, only_memories=None, previous_runs=previous_runs)
             manifest.unresolved_risks.append(risk)
         instructions, input_text = assemble_prompt(state, manifest, previous)
-        run = store.begin_run(state, model, manifest=manifest)
+        run = store.begin_run(state, model, manifest=manifest, agent_access=access)
         heartbeat.run_id = run.id
         logger.info(
             "run started",
@@ -169,12 +172,7 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
         )
         artifacts = ArtifactStore(settings.artifact_root, store)
         registry = build_tool_registry(store, only_memories=only_memories, artifacts=artifacts)
-        policy = next(
-            (item for item in definition.guardrails.capability_policies if item.state_id == state.id),
-            None,
-        )
-        if policy is None:
-            raise RuntimeError(f"state {state.id!r} has no capability policy")
+        policy = resolved_policy(access)
         allowed_state_tools = set(state.tools)
         provider_tools = [
             ProviderTool(tool.name, tool.description, tool.input_schema)

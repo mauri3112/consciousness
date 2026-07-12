@@ -60,7 +60,7 @@ docker compose ps
 curl -fsS http://localhost:8770/api/v1/runtime
 ```
 
-For a persistent volume created before the bundled memory-safety and `qwen3.5:9b` profile, apply the
+For a persistent volume created before the bundled memory-safety, agent access presets, and `qwen3.5:9b` profile, apply the
 upgrade as a new immutable procedure version with a mutation record and recap:
 
 ```bash
@@ -100,6 +100,38 @@ its starting state, and the cycle recorded only-memories tool and artifact evide
 use `--command-timeout 1800`; the default is 900 seconds per command.
 
 Use the Studio or API to inspect the run output, changed resources, source links, context usage, provider request id, usage ledger, approvals, events, and transition after each step. Destructive memory operations must remain pending until an operator approves them.
+
+## Agent Access Presets
+
+Open **Access presets** in the Studio to inspect the bundled coding, review, research, browser, data, memory, and procedure-governance profiles. The catalog distinguishes configured tools from adapters registered in the current runtime. Before assigning a preset, treat any `unavailable` tool as non-executable.
+
+Apply a preset in a procedure draft's State contract, optionally add or remove inherited tools, save, review the activation diff, validate, and activate. Activation saves current local form edits before server validation. Existing state-local contracts appear as `Custom (legacy)` and remain supported.
+
+For API inspection:
+
+```bash
+curl -fsS http://localhost:8770/api/v1/access/catalog
+```
+
+Every subsequent run records `agent_access` with the resolved preset id, permissions, tools, skills, patterns, mutation level, approval requirement, and rationale. See [`access-presets.md`](access-presets.md) for the schema and custom-preset example.
+
+## Memory Stewardship Soak Experiment
+
+The bundled experiment runs Gather, Curate, Synthesize, Validate, Publish, and Audit as six sequential
+agent roles using only `qwen3.5:9b`. It injects a controlled corpus over eight hours and captures both
+databases, retrieval rankings, run evidence, Ollama residency, approvals, and integration health.
+
+```bash
+cp .env.experiment.example .env.experiment
+docker compose --env-file .env.experiment --profile experiment up --build -d
+docker compose --env-file .env.experiment --profile experiment ps
+docker compose --env-file .env.experiment logs -f experiment
+```
+
+The experiment runner refuses to start unless live mode is active, the required model is installed,
+the graph has multiple states, the only enabled local profile is the required model, and Ollama has at
+most that one model resident. It resumes from its durable state after a failure. Full operating and
+assessment instructions are in [`memory-stewardship-experiment.md`](memory-stewardship-experiment.md).
 
 ## Backup And Upgrade
 

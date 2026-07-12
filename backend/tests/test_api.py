@@ -24,6 +24,11 @@ def test_versioned_api_supports_runtime_drafts_and_approvals(tmp_path):
         assert command.status_code == 202
         assert command.json()["status"] == "pending"
 
+        interval = client.put("/api/v1/runtime/interval", json={"interval_seconds": 300})
+        assert interval.status_code == 200
+        assert interval.json()["interval_seconds"] == 300
+        assert client.put("/api/v1/runtime/interval", json={"interval_seconds": 0}).status_code == 422
+
         draft = client.post("/api/v1/procedure/drafts").json()
         draft["definition"]["states"][0]["name"] = "Gather through API"
         saved = client.put(

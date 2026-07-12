@@ -11,8 +11,10 @@ Each state must define:
 - `goal_template`: what the state must achieve.
 - `prompt_contract`: how the agent should behave.
 - `output_contract`: what must be visible after completion.
-- `tools`: capabilities available to this state.
-- `skills`: reusable behavior packs available to this state.
+- `access_preset_id`: optional reusable permission/tool/skill envelope.
+- `access_overrides`: explicit additions, removals, or policy overrides applied to the preset.
+- `tools`: legacy/custom capabilities when no preset is selected.
+- `skills`: legacy/custom behavior packs when no preset is selected.
 - `context_minimum`: minimum model context window.
 - `model_policy`: model selection policy.
 
@@ -32,7 +34,7 @@ Every run should emit:
 - artifact pointers,
 - next transition recommendation.
 
-The shared envelope carries one discriminated payload: `ContextBundle`, `MemoryChangeProposal`, `SynthesisArtifact`, `ValidationReport`, `PublishReceipt`, or `AuditDecision`. Every run is also pinned to a procedure version and records provider, attempt, context manifest, token usage, cost, heartbeat, errors, and append-only lifecycle events.
+The shared envelope carries one discriminated payload: `ContextBundle`, `MemoryChangeProposal`, `SynthesisArtifact`, `ValidationReport`, `PublishReceipt`, or `AuditDecision`. Every run is also pinned to a procedure version and resolved `agent_access` snapshot and records provider, attempt, context manifest, token usage, cost, heartbeat, errors, and append-only lifecycle events.
 
 ## Final Thoughts
 

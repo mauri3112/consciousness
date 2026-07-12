@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-from datetime import timedelta
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -26,9 +27,21 @@ def test_migrations_and_sqlite_safety_are_applied(store: ConsciousnessStore):
         versions = [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-    assert versions == [1, 2]
+    assert versions == [1, 2, 3]
     assert foreign_keys == 1
     assert journal_mode == "wal"
+
+
+def test_concurrent_first_setup_serializes_migrations(tmp_path: Path):
+    database_path = tmp_path / "concurrent-setup.db"
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _index: ConsciousnessStore(database_path).setup(), range(4)))
+
+    store = ConsciousnessStore(database_path)
+    with store.connect() as conn:
+        versions = [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
+    assert versions == [1, 2, 3]
     assert store.integrity_check() == "ok"
 
 

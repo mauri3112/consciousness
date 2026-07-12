@@ -69,6 +69,7 @@ def assemble_prompt(state: ProcedureState, manifest: ContextManifest, previous_r
         [
             "You are executing one state in a durable local agent procedure.",
             state.prompt_contract,
+            f"Enabled skills: {', '.join(state.skills) if state.skills else 'none'}.",
             "Return only one JSON RunOutput envelope. Do not return the state payload at the top level. Final thoughts must be concise operational evidence, never hidden reasoning.",
         ]
     )
@@ -80,6 +81,8 @@ def assemble_prompt(state: ProcedureState, manifest: ContextManifest, previous_r
         "state": state.id,
         "goal": state.goal_template,
         "output_contract": state.output_contract,
+        "available_tools": state.tools,
+        "enabled_skills": state.skills,
         "required_result_envelope": _result_envelope_example(state),
         "context": context,
         "context_unresolved_risks": manifest.unresolved_risks,

@@ -16,6 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .artifacts import ArtifactStore
 from .config import get_settings
 from .models import (
+    AccessOverrides,
     ApprovalRecord,
     ArtifactRecord,
     CommandKind,
@@ -34,6 +35,7 @@ from .only_memories import OnlyMemoriesClient
 from .operations import configure_structured_logging
 from .providers import ProviderError, build_provider
 from .store import ConsciousnessStore, utcnow
+from .tools import build_tool_registry
 
 
 settings = get_settings()
@@ -148,6 +150,16 @@ class ToolCallReconciliation(BaseModel):
     result: dict[str, object] = Field(default_factory=dict)
 
 
+class PresetAssignment(BaseModel):
+    revision: int
+    preset_id: str | None
+    overrides: AccessOverrides = Field(default_factory=AccessOverrides)
+
+
+class RuntimeIntervalUpdate(BaseModel):
+    interval_seconds: int = Field(ge=1, le=86_400)
+
+
 def get_store() -> ConsciousnessStore:
     store = ConsciousnessStore(settings.database_path, execution_mode=settings.execution_mode)
     store.setup()
@@ -178,9 +190,37 @@ def procedure(store: ConsciousnessStore = Depends(get_store)) -> ProcedureSnapsh
     return store.snapshot()
 
 
+@app.get("/api/v1/access/catalog")
+def access_catalog(store: ConsciousnessStore = Depends(get_store)) -> dict[str, object]:
+    definition = store.current_version().definition
+    memory = OnlyMemoriesClient(settings.only_memories_url) if settings.only_memories_url else None
+    registry = build_tool_registry(
+        store,
+        only_memories=memory,
+        artifacts=ArtifactStore(settings.artifact_root, store),
+    )
+    descriptors = registry.catalog()
+    available = {tool.name for tool in descriptors}
+    configured = {tool for preset in definition.access_presets for tool in preset.tools}
+    return {
+        "presets": [preset.model_dump(mode="json") for preset in definition.access_presets],
+        "tools": [tool.model_dump(mode="json") for tool in descriptors],
+        "skills": sorted({skill for preset in definition.access_presets for skill in preset.skills}),
+        "unavailable_tools": sorted(configured - available),
+        "resolved_states": [item.model_dump(mode="json") for item in store.snapshot().resolved_access],
+    }
+
+
 @app.get("/api/v1/runtime", response_model=RuntimeState)
 def runtime(store: ConsciousnessStore = Depends(get_store)) -> RuntimeState:
     return store.runtime()
+
+
+@app.put("/api/v1/runtime/interval", response_model=RuntimeState)
+def update_runtime_interval(
+    payload: RuntimeIntervalUpdate, store: ConsciousnessStore = Depends(get_store)
+) -> RuntimeState:
+    return store.set_runtime_interval(payload.interval_seconds)
 
 
 @app.post("/api/v1/control/{kind}", response_model=RuntimeCommand, status_code=202)
@@ -240,6 +280,32 @@ def update_draft(
         raise HTTPException(status_code=422, detail={"code": "not_a_draft", "message": str(exc)}) from exc
     response.headers["ETag"] = f'"{value.revision}"'
     return value
+
+
+@app.put("/api/v1/procedure/drafts/{version_id}/states/{state_id}/access", response_model=ProcedureVersion)
+def assign_access_preset(
+    version_id: str,
+    state_id: str,
+    payload: PresetAssignment,
+    store: ConsciousnessStore = Depends(get_store),
+) -> ProcedureVersion:
+    try:
+        draft = store.get_version(version_id)
+        definition = draft.definition.model_copy(deep=True)
+        state = next(item for item in definition.states if item.id == state_id)
+        if payload.preset_id is not None and payload.preset_id not in {item.id for item in definition.access_presets}:
+            raise ValueError("unknown access preset")
+        state.access_preset_id = payload.preset_id
+        state.access_overrides = payload.overrides
+        return store.update_draft(version_id, definition, expected_revision=payload.revision)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "resource": "procedure_version"}) from exc
+    except StopIteration as exc:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "resource": "procedure_state"}) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail={"code": "revision_conflict"}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_access_preset", "message": str(exc)}) from exc
 
 
 @app.post("/api/v1/procedure/drafts/{version_id}/validate")

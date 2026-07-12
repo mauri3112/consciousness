@@ -1,0 +1,226 @@
+{
+  "purpose": "Measure whether a sequential six-agent memory stewardship loop preserves durable high-value knowledge, surfaces timely reminders, handles correction/versioning, and prevents repeated low-value notes from dominating retrieval.",
+  "search_probes": [
+    "What must always be protected when curating knowledge?",
+    "What is the current Northstar delivery plan?",
+    "Which reminder or task needs attention soon?",
+    "What are the local model and memory constraints?",
+    "Which information was corrected or superseded?"
+  ],
+  "phases": [
+    {
+      "id": "core-knowledge",
+      "after_minutes": 0,
+      "memories": [
+        {
+          "key": "provenance-axiom",
+          "type": "axiom",
+          "axiom_key": "experiment.protect_provenance",
+          "content": "Protect provenance and reversible history whenever memories are curated; never trade an inspectable source trail for a cleaner-looking summary.",
+          "base_importance": 1.0,
+          "cadence": "weekly"
+        },
+        {
+          "key": "northstar-goal-v1",
+          "type": "project",
+          "content": "Northstar's current goal is to deliver a local-first research briefing by Friday, with a source-linked outline ready on Thursday.",
+          "base_importance": 0.88,
+          "cadence": "daily",
+          "connections": [
+            {"target_key": "provenance-axiom", "weight": 0.85, "relation": "supports", "reason": "The briefing must preserve source provenance."}
+          ]
+        },
+        {
+          "key": "local-runtime-constraint",
+          "type": "system",
+          "content": "The local host has 18 GB total RAM. Run one Ollama model at a time and use qwen3.5:9b for every agent role in this experiment.",
+          "base_importance": 0.96,
+          "cadence": "none"
+        },
+        {
+          "key": "briefing-preference",
+          "type": "preference",
+          "content": "Research briefings should lead with the decision, show the strongest evidence, and keep unresolved contradictions visible.",
+          "base_importance": 0.82,
+          "cadence": "monthly"
+        },
+        {
+          "key": "human-priority-model",
+          "type": "concept",
+          "content": "Human-like information priority combines durable importance, present relevance, repetition, graph relationships, and the ability to revise an outdated belief without erasing its history.",
+          "base_importance": 0.9,
+          "cadence": "monthly"
+        }
+      ]
+    },
+    {
+      "id": "timely-reminders",
+      "after_minutes": 30,
+      "memories": [
+        {
+          "key": "source-review-task",
+          "type": "task",
+          "content": "Reminder: review the three primary Northstar sources before drafting the briefing outline.",
+          "base_importance": 0.94,
+          "cadence": "daily",
+          "expires_after_minutes": 210,
+          "connections": [
+            {"target_key": "northstar-goal-v1", "weight": 0.9, "relation": "supports", "reason": "This task directly advances the active project."}
+          ]
+        },
+        {
+          "key": "stakeholder-event",
+          "type": "event",
+          "content": "A Northstar stakeholder review is scheduled for late afternoon; surface the source-linked outline before that meeting.",
+          "base_importance": 0.9,
+          "cadence": "none",
+          "expires_after_minutes": 240
+        }
+      ]
+    },
+    {
+      "id": "benign-repetition",
+      "after_minutes": 60,
+      "memories": [
+        {
+          "key": "source-review-reminder-2",
+          "type": "task",
+          "content": "Reminder: review the three primary Northstar sources before drafting the briefing outline.",
+          "base_importance": 0.72,
+          "cadence": "daily",
+          "expires_after_minutes": 180
+        },
+        {
+          "key": "scratch-note-1",
+          "type": "note",
+          "content": "Maybe use a blue cover for the Northstar briefing.",
+          "base_importance": 0.12,
+          "cadence": "none"
+        },
+        {
+          "key": "scratch-note-2",
+          "type": "note",
+          "content": "Temporary thought: consider moving one Northstar chart to the appendix.",
+          "base_importance": 0.16,
+          "cadence": "none"
+        }
+      ]
+    },
+    {
+      "id": "plan-correction",
+      "after_minutes": 90,
+      "memories": [
+        {
+          "key": "northstar-goal-v2",
+          "supersedes_key": "northstar-goal-v1",
+          "type": "project",
+          "content": "Northstar's current goal is to deliver the source-linked research briefing on Monday; the Friday date was replaced after stakeholder review moved.",
+          "base_importance": 0.93,
+          "cadence": "daily"
+        },
+        {
+          "key": "schedule-change-source",
+          "type": "source",
+          "content": "Stakeholder scheduling note: the Northstar review moved from Friday to Monday, so the Monday deadline is authoritative.",
+          "base_importance": 0.86,
+          "cadence": "none",
+          "connections": [
+            {"target_key": "northstar-goal-v2", "weight": 0.95, "relation": "supports", "reason": "Primary evidence for the corrected schedule."}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "contradictory-input",
+      "after_minutes": 120,
+      "memories": [
+        {
+          "key": "unverified-friday-claim",
+          "type": "note",
+          "content": "Unverified chat message says the Northstar briefing may still be due Friday, contrary to the scheduling note.",
+          "base_importance": 0.45,
+          "cadence": "none",
+          "expires_after_minutes": 180
+        }
+      ]
+    },
+    {
+      "id": "resolution-evidence",
+      "after_minutes": 180,
+      "memories": [
+        {
+          "key": "deadline-resolution",
+          "type": "decision",
+          "content": "Decision confirmed from the stakeholder scheduling note: Monday remains the Northstar briefing deadline; the later Friday chat claim is not authoritative.",
+          "base_importance": 0.95,
+          "cadence": "weekly",
+          "connections": [
+            {"target_key": "northstar-goal-v2", "weight": 1.0, "relation": "supports", "reason": "Confirms the current project schedule."},
+            {"target_key": "schedule-change-source", "weight": 0.95, "relation": "derives", "reason": "Decision derives from the authoritative scheduling source."}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "low-value-noise",
+      "after_minutes": 240,
+      "memories": [
+        {
+          "key": "scratch-note-3",
+          "type": "note",
+          "content": "Northstar scratch note: someone mentioned coffee during the meeting.",
+          "base_importance": 0.05,
+          "cadence": "none"
+        },
+        {
+          "key": "scratch-note-4",
+          "type": "note",
+          "content": "Northstar scratch note: the room was colder than expected.",
+          "base_importance": 0.04,
+          "cadence": "none"
+        },
+        {
+          "key": "scratch-note-5",
+          "type": "note",
+          "content": "Northstar scratch note: test a different bullet style later.",
+          "base_importance": 0.07,
+          "cadence": "none"
+        }
+      ]
+    },
+    {
+      "id": "durable-reinforcement",
+      "after_minutes": 300,
+      "memories": [
+        {
+          "key": "curation-checklist",
+          "type": "skill",
+          "content": "Memory curation checklist: retain provenance, prefer current versions, raise active reminders, demote expired noise, preserve contradictions until resolved, and make important knowledge navigable through explicit connections.",
+          "base_importance": 0.92,
+          "cadence": "weekly",
+          "connections": [
+            {"target_key": "provenance-axiom", "weight": 1.0, "relation": "derives", "reason": "Operationalizes the provenance axiom."},
+            {"target_key": "human-priority-model", "weight": 0.9, "relation": "extends", "reason": "Turns the priority model into a reusable procedure."}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "final-reminder",
+      "after_minutes": 360,
+      "memories": [
+        {
+          "key": "assessment-task",
+          "type": "task",
+          "content": "At experiment assessment, compare ranking snapshots, version history, expired reminders, duplicate proposals, agent run evidence, and both database backups before drawing conclusions.",
+          "base_importance": 0.98,
+          "cadence": "daily",
+          "expires_after_minutes": 2880,
+          "connections": [
+            {"target_key": "curation-checklist", "weight": 0.9, "relation": "supports", "reason": "Assessment should test the intended curation behavior."}
+          ]
+        }
+      ]
+    }
+  ]
+}

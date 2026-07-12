@@ -16,4 +16,3 @@ def worker_health() -> None:
     age = (datetime.now(timezone.utc) - runtime.heartbeat_at).total_seconds()
     if age > settings.worker_lease_seconds * 2:
         raise SystemExit(f"worker heartbeat is stale ({age:.1f}s)")
-

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import fnmatch
 import re
 from typing import Any
 
 from .models import ProcedureDefinition, RunOutput, Transition
+from .presets import resolve_state_access
 
 
 _GUARD_RE = re.compile(r"^payload\.([a-zA-Z_][a-zA-Z0-9_]*)\s*(==|!=)\s*(true|false|[a-zA-Z0-9_-]+)$")
@@ -51,6 +53,27 @@ def validate_procedure(definition: ProcedureDefinition) -> list[str]:
     missing_policies = state_set - policy_ids
     if missing_policies:
         errors.append(f"missing capability policies: {', '.join(sorted(missing_policies))}")
+
+    preset_ids = [preset.id for preset in definition.access_presets]
+    if len(preset_ids) != len(set(preset_ids)):
+        errors.append("access preset ids must be unique")
+    for state in definition.states:
+        try:
+            access = resolve_state_access(definition, state)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        allowed = set(access.allowed_tool_patterns)
+        if not access.tools:
+            errors.append(f"state {state.id} resolves to no tools")
+        if not access.skills:
+            errors.append(f"state {state.id} resolves to no skills")
+        if access.tools and not allowed:
+            errors.append(f"state {state.id} has tools but no allowed tool patterns")
+        if state.access_preset_id:
+            for tool in access.tools:
+                if allowed and not any(fnmatch.fnmatchcase(tool, pattern) for pattern in allowed):
+                    errors.append(f"state {state.id} tool {tool} is outside its allowed tool patterns")
 
     model_ids = {model.id for model in definition.models if model.enabled}
     if not model_ids:

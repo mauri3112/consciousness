@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .artifacts import ArtifactStore
-from .models import CapabilityPolicy, SourceLink, ToolCallRecord
+from .models import CapabilityPolicy, SourceLink, ToolCallRecord, ToolDescriptor
 from .only_memories import OnlyMemoriesClient, RemoteWriteUncertain
 from .store import ConsciousnessStore
 
@@ -41,6 +41,17 @@ class ToolRegistry:
         if tool.name in self._tools:
             raise ValueError(f"duplicate tool: {tool.name}")
         self._tools[tool.name] = tool
+
+    def catalog(self) -> list[ToolDescriptor]:
+        return [
+            ToolDescriptor(
+                name=tool.name,
+                description=tool.description,
+                mutation_level=tool.mutation_level,
+                idempotent=tool.idempotent,
+            )
+            for tool in sorted(self._tools.values(), key=lambda item: item.name)
+        ]
 
     def definitions_for(self, policy: CapabilityPolicy) -> list[ToolDefinition]:
         return [tool for tool in self._tools.values() if _allowed(tool.name, policy.allowed_tool_patterns)]

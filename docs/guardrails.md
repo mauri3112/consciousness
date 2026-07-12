@@ -11,6 +11,8 @@ Every state has a capability policy:
 - approval requirement,
 - rationale.
 
+States may inherit this envelope from a versioned access preset. Presets additionally define structured filesystem, shell, network, external-write, and secret permissions plus default tools and skills. Resolution happens once before execution; provider exposure and tool execution use the same result, and the run stores that result for audit and replay. Configuration does not imply adapter availability: the access catalog and Studio report unavailable configured tools explicitly.
+
 The important distinction is between proposing a change and applying a change. A smart auditor may propose procedure mutation, but applied mutations should be versioned, diffed, budget-limited, and reversible.
 
 Local v1 uses bounded autonomy: validated additive only-memories writes and writes inside the configured artifact root may execute automatically. Forgetting, superseding, external filesystem writes, and procedure mutations become durable approval requests. The worker rechecks policy at execution time.

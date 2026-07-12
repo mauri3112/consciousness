@@ -1,9 +1,35 @@
 import { z } from "zod";
 
+const permissionSchema = z.object({
+  filesystem: z.enum(["none", "read_only", "workspace_write", "unrestricted"]),
+  shell: z.enum(["none", "read_only", "workspace_write", "unrestricted"]),
+  network: z.enum(["none", "restricted", "unrestricted"]),
+  external_writes: z.enum(["deny", "ask", "allow"]),
+  secrets: z.enum(["deny", "ask", "allow"])
+});
+const overridesSchema = z.object({
+  add_tools: z.array(z.string()).default([]), remove_tools: z.array(z.string()).default([]),
+  add_skills: z.array(z.string()).default([]), remove_skills: z.array(z.string()).default([]),
+  add_allowed_tool_patterns: z.array(z.string()).default([]), remove_allowed_tool_patterns: z.array(z.string()).default([]),
+  permissions: permissionSchema.nullable().default(null), mutation_level: z.string().nullable().default(null),
+  requires_approval: z.boolean().nullable().default(null), rationale: z.string().nullable().default(null)
+});
+const presetSchema = z.object({
+  id: z.string(), name: z.string(), description: z.string(), agent_type: z.string(), permissions: permissionSchema,
+  tools: z.array(z.string()), skills: z.array(z.string()), allowed_tool_patterns: z.array(z.string()),
+  mutation_level: z.string(), requires_approval: z.boolean(), rationale: z.string(), built_in: z.boolean()
+});
+const resolvedAccessSchema = z.object({
+  state_id: z.string(), preset_id: z.string().nullable(), permissions: permissionSchema,
+  tools: z.array(z.string()), skills: z.array(z.string()), allowed_tool_patterns: z.array(z.string()),
+  mutation_level: z.string(), requires_approval: z.boolean(), rationale: z.string()
+});
+
 const stateSchema = z.object({
   id: z.string(), name: z.string(), kind: z.string(), domain: z.string(),
   goal_template: z.string(), prompt_contract: z.string(), output_contract: z.string(),
   tools: z.array(z.string()), skills: z.array(z.string()), context_minimum: z.number(),
+  access_preset_id: z.string().nullable().default(null), access_overrides: overridesSchema.default({ add_tools: [], remove_tools: [], add_skills: [], remove_skills: [], add_allowed_tool_patterns: [], remove_allowed_tool_patterns: [], permissions: null, mutation_level: null, requires_approval: null, rationale: null }),
   output_reserve: z.number().default(4096), model_policy: z.string(), max_attempts: z.number().default(2),
   max_run_budget: z.number().nullable().default(null), x: z.number(), y: z.number(), is_current: z.boolean()
 });
@@ -33,7 +59,7 @@ const runSchema = z.object({
   attempt: z.number(), model_id: z.string(), provider: z.string(), provider_request_id: z.string().nullable(),
   context_window: z.number(), context_used: z.number(), input_tokens: z.number(), output_tokens: z.number(),
   cached_tokens: z.number(), cost: z.number(), context_manifest: z.record(z.string(), z.unknown()),
-  started_at: z.string(), heartbeat_at: z.string().nullable(), finished_at: z.string().nullable(),
+  agent_access: resolvedAccessSchema.nullable().default(null), started_at: z.string(), heartbeat_at: z.string().nullable(), finished_at: z.string().nullable(),
   final_thoughts: z.string().nullable(), changes: z.array(z.record(z.string(), z.unknown())),
   output: outputSchema.nullable(), error_category: z.string().nullable(), error_message: z.string().nullable()
 });
@@ -51,7 +77,7 @@ const guardrailsSchema = z.object({
   evidence_policy: z.record(z.string(), z.boolean())
 });
 const definitionSchema = z.object({
-  name: z.string(), states: z.array(stateSchema), transitions: z.array(transitionSchema), models: z.array(modelSchema), guardrails: guardrailsSchema
+  name: z.string(), access_presets: z.array(presetSchema).default([]), states: z.array(stateSchema), transitions: z.array(transitionSchema), models: z.array(modelSchema), guardrails: guardrailsSchema
 });
 const versionSchema = z.object({
   id: z.string(), version: z.number(), status: z.string(), digest: z.string(), parent_id: z.string().nullable(),
@@ -92,10 +118,13 @@ export const snapshotSchema = z.object({
   version: versionSchema, runtime: runtimeSchema, states: z.array(stateSchema), transitions: z.array(transitionSchema),
   models: z.array(modelSchema), runs: z.array(runSchema), recaps: z.array(recapSchema),
   integrations: z.array(integrationSchema), guardrails: guardrailsSchema,
+  resolved_access: z.array(resolvedAccessSchema).default([]),
   approvals: z.array(approvalSchema), mutations: z.array(mutationSchema)
 });
 
 export type ProcedureState = z.infer<typeof stateSchema>;
+export type AgentAccessPreset = z.infer<typeof presetSchema>;
+export type ResolvedStateAccess = z.infer<typeof resolvedAccessSchema>;
 export type Transition = z.infer<typeof transitionSchema>;
 export type ModelProfile = z.infer<typeof modelSchema>;
 export type ProcedureDefinition = z.infer<typeof definitionSchema>;
@@ -105,6 +134,12 @@ export type ApprovalRecord = z.infer<typeof approvalSchema>;
 export type ProcedureSnapshot = z.infer<typeof snapshotSchema>;
 export type RunEvent = { id: number; run_id: string | null; event_type: string; payload: Record<string, unknown>; created_at: string };
 export type RuntimeCommand = z.infer<typeof commandSchema>;
+const accessCatalogSchema = z.object({
+  presets: z.array(presetSchema),
+  tools: z.array(z.object({ name: z.string(), description: z.string(), mutation_level: z.string(), idempotent: z.boolean() })),
+  skills: z.array(z.string()), unavailable_tools: z.array(z.string()), resolved_states: z.array(resolvedAccessSchema)
+});
+export type AccessCatalog = z.infer<typeof accessCatalogSchema>;
 
 const API_URL = (import.meta.env.VITE_CONSCIOUSNESS_API_URL as string | undefined) ?? "";
 
@@ -125,6 +160,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fetchProcedure(): Promise<ProcedureSnapshot> {
   return snapshotSchema.parse(await request<unknown>("/procedure"));
+}
+
+export async function fetchAccessCatalog(): Promise<AccessCatalog> {
+  return accessCatalogSchema.parse(await request<unknown>("/access/catalog"));
 }
 
 export function issueControl(kind: "step" | "run" | "pause" | "resume" | "stop") {

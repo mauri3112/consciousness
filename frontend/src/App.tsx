@@ -11,20 +11,27 @@ import {
   type Node
 } from "@xyflow/react";
 import {
-  Activity, AlertTriangle, Archive, Box, BrainCircuit, Check, CircleDot, Database,
+  Activity, AlertTriangle, Archive, Box, BrainCircuit, Check, CircleDot, Database, KeyRound,
   FileDiff, GitBranch, LayoutDashboard, Network, Pause, Play, Plus, RefreshCw,
   RotateCcw, Save, Settings, ShieldCheck, Square, Upload, X
 } from "lucide-react";
 import {
-  activateDraft, createDraft, decideApproval, eventStreamUrl, exportUrl, fetchDiff,
+  activateDraft, createDraft, decideApproval, eventStreamUrl, exportUrl, fetchAccessCatalog, fetchDiff,
   fetchCommand, fetchProcedure, fetchRunEvents, importProcedure, issueControl, rollbackVersion,
   saveDraft, validateDraft, type ApprovalRecord, type ProcedureDefinition,
   type ProcedureSnapshot, type ProcedureState, type ProcedureVersion, type RunRecord
 } from "./api";
 
-type View = "overview" | "editor" | "runs" | "approvals" | "mutations" | "models" | "integrations";
+type View = "overview" | "editor" | "access" | "runs" | "approvals" | "mutations" | "models" | "integrations";
 const numberFormat = new Intl.NumberFormat();
 const moneyFormat = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 4 });
+
+function effectiveToolCount(state: ProcedureState, definition: ProcedureDefinition) {
+  const preset = definition.access_presets.find((item) => item.id === state.access_preset_id);
+  if (!preset) return state.tools.length;
+  const removed = new Set(state.access_overrides.remove_tools);
+  return new Set([...preset.tools, ...state.access_overrides.add_tools].filter((tool) => !removed.has(tool))).size;
+}
 
 export default function App() {
   const client = useQueryClient();
@@ -56,6 +63,7 @@ export default function App() {
         <div className="view-frame">
           {view === "overview" ? <Overview snapshot={snapshot} /> : null}
           {view === "editor" ? <ProcedureEditor snapshot={snapshot} /> : null}
+          {view === "access" ? <AccessPresetsView snapshot={snapshot} /> : null}
           {view === "runs" ? <RunsView runs={snapshot.runs} /> : null}
           {view === "approvals" ? <ApprovalsView approvals={snapshot.approvals} /> : null}
           {view === "mutations" ? <MutationsView snapshot={snapshot} /> : null}
@@ -70,7 +78,7 @@ export default function App() {
 function Sidebar({ view, onView, snapshot }: { view: View; onView: (view: View) => void; snapshot: ProcedureSnapshot }) {
   const pending = snapshot.approvals.filter((item) => item.status === "pending").length;
   const groups: Array<{ label: string; items: Array<[View, string, typeof Network]> }> = [
-    { label: "Procedure", items: [["editor", "Editor", GitBranch], ["mutations", "Mutations", FileDiff]] },
+    { label: "Procedure", items: [["editor", "Editor", GitBranch], ["access", "Access presets", KeyRound], ["mutations", "Mutations", FileDiff]] },
     { label: "Execution", items: [["runs", "Runs", Activity], ["approvals", "Approvals", ShieldCheck], ["models", "Models", Settings]] },
     { label: "Integrations", items: [["integrations", "only-memories", Database]] }
   ];
@@ -200,15 +208,18 @@ function ProcedureGraph({ snapshot, selectedId, onSelect }: { snapshot: Procedur
 
 function StateInspector({ state, run, snapshot }: { state: ProcedureState; run?: RunRecord; snapshot: ProcedureSnapshot }) {
   const policy = snapshot.guardrails.capability_policies.find((item) => item.state_id === state.id);
+  const access = snapshot.resolved_access.find((item) => item.state_id === state.id);
+  const preset = snapshot.version.definition.access_presets.find((item) => item.id === access?.preset_id);
   const percent = run ? Math.min(100, Math.round((run.context_used / run.context_window) * 100)) : 0;
   return <aside className="inspector"><PanelHeader title="Inspector" meta={state.is_current ? "Current state" : "Selected state"} />
     <div className="state-heading"><CircleDot size={22} /><div><strong>{state.name}</strong><span>{state.domain}</span></div><b>{state.kind}</b></div>
     <InspectorSection title="Agent goal"><p>{state.goal_template}</p></InspectorSection>
-    <InspectorSection title="Tools"><TagList values={state.tools} /></InspectorSection>
-    <InspectorSection title="Skills"><TagList values={state.skills} blue /></InspectorSection>
+    <InspectorSection title="Access preset"><div className="kv"><span>{preset?.name ?? "Custom (legacy)"}</span><strong>{access?.permissions.filesystem ?? "legacy"}</strong></div><p className="note">{preset?.description ?? "State-local tools, skills, and guardrails."}</p></InspectorSection>
+    <InspectorSection title="Tools"><TagList values={access?.tools ?? state.tools} /></InspectorSection>
+    <InspectorSection title="Skills"><TagList values={access?.skills ?? state.skills} blue /></InspectorSection>
     <InspectorSection title="Model policy"><div className="kv"><span>{state.model_policy}</span><strong>{numberFormat.format(state.context_minimum)} min ctx</strong></div></InspectorSection>
     <InspectorSection title="Context budget"><div className="meter"><i style={{ width: `${percent}%` }} /></div><div className="kv"><span>Used</span><strong>{percent}%</strong></div></InspectorSection>
-    <InspectorSection title="Guardrails"><div className="guardrail-list"><span>Mutation <b>{policy?.mutation_level ?? "bounded"}</b></span><span>Approval <b>{policy?.requires_approval ? "required" : "automatic"}</b></span><span>Attempts <b>{state.max_attempts}</b></span></div><p className="note">{policy?.rationale}</p></InspectorSection>
+    <InspectorSection title="Guardrails"><div className="guardrail-list"><span>Mutation <b>{access?.mutation_level ?? policy?.mutation_level ?? "bounded"}</b></span><span>Approval <b>{(access?.requires_approval ?? policy?.requires_approval) ? "required" : "automatic"}</b></span><span>Attempts <b>{state.max_attempts}</b></span></div><p className="note">{access?.rationale ?? policy?.rationale}</p></InspectorSection>
     <InspectorSection title="Final thoughts"><p className="thoughts">{run?.final_thoughts ?? "No completed run for this state."}</p></InspectorSection>
   </aside>;
 }
@@ -225,8 +236,9 @@ function ProcedureEditor({ snapshot }: { snapshot: ProcedureSnapshot }) {
   const selected = definition.states.find((state) => state.id === selectedId);
   const selectedEdge = definition.transitions.find((edge) => edge.id === selectedEdgeId);
   const selectedPolicy = definition.guardrails.capability_policies.find((policy) => policy.state_id === selectedId);
+  const selectedPreset = definition.access_presets.find((preset) => preset.id === selected?.access_preset_id);
   const nodes = useMemo<Node[]>(() => definition.states.map((state, index) => ({
-    id: state.id, position: { x: state.x * 8, y: state.y * 5.2 }, data: { label: <div className="node-label"><div><b>{String(index + 1).padStart(2, "0")}</b><strong>{state.name}</strong><i /></div><p>{state.goal_template}</p><small>TOOLS {state.tools.length}<em />MODEL {state.model_policy}</small></div> },
+    id: state.id, position: { x: state.x * 8, y: state.y * 5.2 }, data: { label: <div className="node-label"><div><b>{String(index + 1).padStart(2, "0")}</b><strong>{state.name}</strong><i /></div><p>{state.goal_template}</p><small>TOOLS {effectiveToolCount(state, definition)}<em />MODEL {state.model_policy}</small></div> },
     className: `procedure-node ${state.id === selectedId ? "selected" : ""}`
   })), [definition.states, selectedId]);
   const edges = useMemo<Edge[]>(() => definition.transitions.map((item) => ({ id: item.id, source: item.source_id, target: item.target_id, markerEnd: { type: MarkerType.ArrowClosed }, label: item.guard })), [definition.transitions]);
@@ -234,7 +246,7 @@ function ProcedureEditor({ snapshot }: { snapshot: ProcedureSnapshot }) {
   async function begin() { setBusy(true); try { const next = await createDraft(); setDraft(next); setDefinition(next.definition); setValidation([]); } finally { setBusy(false); } }
   async function save() { if (!draft) return; setBusy(true); try { const next = await saveDraft(draft, definition); setDraft(next); const check = await validateDraft(next.id); setValidation(check.errors); } finally { setBusy(false); } }
   async function review() { if (!draft) return; const value = await fetchDiff(snapshot.version.id, draft.id); setDiff(value.diff || "No semantic changes."); }
-  async function activate() { if (!draft) return; setBusy(true); try { const check = await validateDraft(draft.id); setValidation(check.errors); if (!check.valid) return; await activateDraft(draft.id); setDraft(null); setDiff(""); await client.invalidateQueries({ queryKey: ["procedure"] }); } finally { setBusy(false); } }
+  async function activate() { if (!draft) return; setBusy(true); try { const saved = await saveDraft(draft, definition); setDraft(saved); const check = await validateDraft(saved.id); setValidation(check.errors); if (!check.valid) return; await activateDraft(saved.id); setDraft(null); setDiff(""); await client.invalidateQueries({ queryKey: ["procedure"] }); } finally { setBusy(false); } }
   const onConnect = useCallback((connection: Connection) => {
     if (!draft || !connection.source || !connection.target) return;
     const id = `${connection.source}_to_${connection.target}_${Date.now()}`;
@@ -248,7 +260,7 @@ function ProcedureEditor({ snapshot }: { snapshot: ProcedureSnapshot }) {
     if (!draft) return;
     let index = definition.states.length + 1; let id = `state_${index}`;
     while (definition.states.some((state) => state.id === id)) { index += 1; id = `state_${index}`; }
-    const next: ProcedureState = { id, name: `State ${index}`, kind: "custom", domain: "New domain", goal_template: "Define the goal for this state.", prompt_contract: "Follow the state contract and preserve evidence.", output_contract: "A structured durable result.", tools: [], skills: [], context_minimum: 32768, output_reserve: 4096, model_policy: "cheap-capable", max_attempts: 2, max_run_budget: null, x: 50, y: 50, is_current: false };
+    const next: ProcedureState = { id, name: `State ${index}`, kind: "custom", domain: "New domain", goal_template: "Define the goal for this state.", prompt_contract: "Follow the state contract and preserve evidence.", output_contract: "A structured durable result.", tools: [], skills: [], access_preset_id: "coding-agent", access_overrides: { add_tools: [], remove_tools: [], add_skills: [], remove_skills: [], add_allowed_tool_patterns: [], remove_allowed_tool_patterns: [], permissions: null, mutation_level: null, requires_approval: null, rationale: null }, context_minimum: 32768, output_reserve: 4096, model_policy: "cheap-capable", max_attempts: 2, max_run_budget: null, x: 50, y: 50, is_current: false };
     const policy = { state_id: id, allowed_tool_patterns: [], mutation_level: "read_only", requires_approval: false, rationale: "New states begin read-only." };
     setDefinition((current) => ({ ...current, states: [...current.states, next], guardrails: { ...current.guardrails, capability_policies: [...current.guardrails.capability_policies, policy] } })); setSelectedEdgeId(""); setSelectedId(id);
   }
@@ -272,16 +284,16 @@ function ProcedureEditor({ snapshot }: { snapshot: ProcedureSnapshot }) {
       <div className="field-pair"><Field label="Weight"><input type="number" min="0" max="2" step="0.05" value={selectedEdge.weight} disabled={!draft} onChange={(e) => updateTransition({ weight: Number(e.target.value) })} /></Field><Field label="Active"><select value={String(selectedEdge.active)} disabled={!draft} onChange={(e) => updateTransition({ active: e.target.value === "true" })}><option value="true">active</option><option value="false">disabled</option></select></Field></div>
       {draft ? <button className="danger" onClick={() => { setDefinition((current) => ({ ...current, transitions: current.transitions.filter((edge) => edge.id !== selectedEdge.id) })); setSelectedEdgeId(""); }}><X size={14} />Remove transition</button> : null}
     </div> : selected ? <div className="form-stack">
+      <Field label="Select state"><select value={selectedId} onChange={(event) => { setSelectedEdgeId(""); setSelectedId(event.target.value); }}>{definition.states.map((state) => <option key={state.id} value={state.id}>{state.name}</option>)}</select></Field>
       <Field label="Name"><input value={selected.name} disabled={!draft} onChange={(e) => updateState({ name: e.target.value })} /></Field>
       <div className="field-pair"><Field label="Kind"><select value={selected.kind} disabled={!draft} onChange={(e) => updateState({ kind: e.target.value })}>{["gather","curate","synthesize","validate","publish","audit","custom"].map((item) => <option key={item}>{item}</option>)}</select></Field><Field label="Model policy"><input value={selected.model_policy} disabled={!draft} onChange={(e) => updateState({ model_policy: e.target.value })} /></Field></div>
       <Field label="Domain"><input value={selected.domain} disabled={!draft} onChange={(e) => updateState({ domain: e.target.value })} /></Field>
       <Field label="Goal"><textarea value={selected.goal_template} disabled={!draft} onChange={(e) => updateState({ goal_template: e.target.value })} /></Field>
       <Field label="Prompt contract"><textarea value={selected.prompt_contract} disabled={!draft} onChange={(e) => updateState({ prompt_contract: e.target.value })} /></Field>
       <Field label="Output contract"><textarea value={selected.output_contract} disabled={!draft} onChange={(e) => updateState({ output_contract: e.target.value })} /></Field>
-      <Field label="Tools (one per line)"><textarea value={selected.tools.join("\n")} disabled={!draft} onChange={(e) => updateState({ tools: e.target.value.split("\n").filter(Boolean) })} /></Field>
-      <Field label="Skills (one per line)"><textarea value={selected.skills.join("\n")} disabled={!draft} onChange={(e) => updateState({ skills: e.target.value.split("\n").filter(Boolean) })} /></Field>
+      <div className="access-editor"><Field label="Access preset"><select value={selected.access_preset_id ?? ""} disabled={!draft} onChange={(event) => updateState({ access_preset_id: event.target.value || null, access_overrides: { add_tools: [], remove_tools: [], add_skills: [], remove_skills: [], add_allowed_tool_patterns: [], remove_allowed_tool_patterns: [], permissions: null, mutation_level: null, requires_approval: null, rationale: null } })}><option value="">Custom (legacy)</option>{definition.access_presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></Field>{selectedPreset ? <><p>{selectedPreset.description}</p><div className="permission-grid"><span>Filesystem <b>{selectedPreset.permissions.filesystem}</b></span><span>Shell <b>{selectedPreset.permissions.shell}</b></span><span>Network <b>{selectedPreset.permissions.network}</b></span><span>External writes <b>{selectedPreset.permissions.external_writes}</b></span></div><TagList values={selectedPreset.tools} /><TagList values={selectedPreset.skills} blue /><Field label="Add tools (one per line)"><textarea value={selected.access_overrides.add_tools.join("\n")} disabled={!draft} onChange={(event) => updateState({ access_overrides: { ...selected.access_overrides, add_tools: event.target.value.split("\n").filter(Boolean) } })} /></Field><Field label="Remove inherited tools"><textarea value={selected.access_overrides.remove_tools.join("\n")} disabled={!draft} onChange={(event) => updateState({ access_overrides: { ...selected.access_overrides, remove_tools: event.target.value.split("\n").filter(Boolean) } })} /></Field></> : <><Field label="Tools (one per line)"><textarea value={selected.tools.join("\n")} disabled={!draft} onChange={(e) => updateState({ tools: e.target.value.split("\n").filter(Boolean) })} /></Field><Field label="Skills (one per line)"><textarea value={selected.skills.join("\n")} disabled={!draft} onChange={(e) => updateState({ skills: e.target.value.split("\n").filter(Boolean) })} /></Field></>}</div>
       <div className="field-pair"><Field label="Minimum context"><input type="number" value={selected.context_minimum} disabled={!draft} onChange={(e) => updateState({ context_minimum: Number(e.target.value) })} /></Field><Field label="Output reserve"><input type="number" value={selected.output_reserve} disabled={!draft} onChange={(e) => updateState({ output_reserve: Number(e.target.value) })} /></Field></div>
-      {selectedPolicy ? <><div className="field-pair"><Field label="Mutation level"><input value={selectedPolicy.mutation_level} disabled={!draft} onChange={(e) => updatePolicy({ mutation_level: e.target.value })} /></Field><Field label="Approval"><select value={String(selectedPolicy.requires_approval)} disabled={!draft} onChange={(e) => updatePolicy({ requires_approval: e.target.value === "true" })}><option value="false">bounded automatic</option><option value="true">required</option></select></Field></div><Field label="Allowed tool patterns"><textarea value={selectedPolicy.allowed_tool_patterns.join("\n")} disabled={!draft} onChange={(e) => updatePolicy({ allowed_tool_patterns: e.target.value.split("\n").filter(Boolean) })} /></Field><Field label="Guardrail rationale"><textarea value={selectedPolicy.rationale} disabled={!draft} onChange={(e) => updatePolicy({ rationale: e.target.value })} /></Field></> : null}
+      {selectedPolicy && !selectedPreset ? <><div className="field-pair"><Field label="Mutation level"><input value={selectedPolicy.mutation_level} disabled={!draft} onChange={(e) => updatePolicy({ mutation_level: e.target.value })} /></Field><Field label="Approval"><select value={String(selectedPolicy.requires_approval)} disabled={!draft} onChange={(e) => updatePolicy({ requires_approval: e.target.value === "true" })}><option value="false">bounded automatic</option><option value="true">required</option></select></Field></div><Field label="Allowed tool patterns"><textarea value={selectedPolicy.allowed_tool_patterns.join("\n")} disabled={!draft} onChange={(e) => updatePolicy({ allowed_tool_patterns: e.target.value.split("\n").filter(Boolean) })} /></Field><Field label="Guardrail rationale"><textarea value={selectedPolicy.rationale} disabled={!draft} onChange={(e) => updatePolicy({ rationale: e.target.value })} /></Field></> : null}
       {draft ? <button className="danger" onClick={removeState}><X size={14} />Remove state</button> : null}
     </div> : <EmptyState label="Select a state" />}</aside>
     {diff ? <div className="diff-drawer"><div><strong>Activation diff</strong><button onClick={() => setDiff("")}><X size={15} /></button></div><pre>{diff}</pre></div> : null}
@@ -331,6 +343,23 @@ function MutationCard({ item }: { item: ProcedureSnapshot["mutations"][number] }
   const [confirming, setConfirming] = useState(false);
   const rollback = useMutation({ mutationFn: () => rollbackVersion(item.rollback_version_id), onSuccess: () => client.invalidateQueries({ queryKey: ["procedure"] }) });
   return <article><div className="row-title"><strong>{item.rationale}</strong><span className={`status-chip ${item.status}`}>{item.status}</span></div><p>{item.base_version_id} → {item.proposed_version_id}</p><dl className="impact-summary"><div><dt>Budget impact</dt><dd>{Object.keys(item.budget_impact).length ? JSON.stringify(item.budget_impact) : "No recorded change"}</dd></div><div><dt>Rollback target</dt><dd>{item.rollback_version_id}</dd></div></dl><pre aria-label="Mutation diff">{item.diff || "No textual diff."}</pre>{rollback.isError ? <p className="inline-error" role="alert">Rollback failed: {rollback.error.message}</p> : null}{confirming ? <div className="rollback-confirm" role="group" aria-label="Rollback confirmation"><AlertTriangle aria-hidden="true" size={16} /><p><strong>Activate rollback version?</strong>This creates a new immutable active version; history is preserved.</p><div className="decision-buttons"><button onClick={() => setConfirming(false)} disabled={rollback.isPending}>Cancel</button><button className="danger" onClick={() => rollback.mutate()} disabled={rollback.isPending}>{rollback.isPending ? "Rolling back…" : "Confirm rollback"}</button></div></div> : <button onClick={() => setConfirming(true)}><RotateCcw aria-hidden="true" size={14} />Review rollback</button>}</article>;
+}
+
+function AccessPresetsView({ snapshot }: { snapshot: ProcedureSnapshot }) {
+  const catalog = useQuery({ queryKey: ["access-catalog"], queryFn: fetchAccessCatalog });
+  const unavailable = new Set(catalog.data?.unavailable_tools ?? []);
+  return <section className="table-view access-view"><PanelHeader title="Agent access presets" meta={`${snapshot.version.definition.access_presets.length} versioned profiles`} />
+    <div className="access-intro"><div><strong>Portable capability envelopes</strong><p>Presets inherit into procedure states and resolve to a pinned permission, tool, and skill snapshot on every run. External writes and secrets stay explicit.</p></div><div><span>Registered tools <b>{catalog.data?.tools.length ?? "…"}</b></span><span>Configured adapters unavailable <b>{catalog.data?.unavailable_tools.length ?? "…"}</b></span></div></div>
+    {catalog.isError ? <div className="validation-banner"><AlertTriangle size={16} /><div><strong>Runtime catalog unavailable</strong><span>{catalog.error.message}</span></div></div> : null}
+    <div className="preset-grid">{snapshot.version.definition.access_presets.map((preset) => <article key={preset.id}>
+      <div className="preset-title"><div><strong>{preset.name}</strong><span>{preset.agent_type}</span></div><b>{preset.built_in ? "built in" : "custom"}</b></div>
+      <p>{preset.description}</p>
+      <div className="permission-grid"><span>Filesystem <b>{preset.permissions.filesystem}</b></span><span>Shell <b>{preset.permissions.shell}</b></span><span>Network <b>{preset.permissions.network}</b></span><span>External writes <b>{preset.permissions.external_writes}</b></span><span>Secrets <b>{preset.permissions.secrets}</b></span><span>Approval <b>{preset.requires_approval ? "required" : "bounded"}</b></span></div>
+      <h3>Tools</h3><div className="tag-list">{preset.tools.map((tool) => <span className={unavailable.has(tool) ? "unavailable" : ""} title={unavailable.has(tool) ? "No runtime adapter registered" : "Runtime adapter available"} key={tool}>{tool}{unavailable.has(tool) ? " · unavailable" : ""}</span>)}</div>
+      <h3>Skills</h3><TagList values={preset.skills} blue />
+      <small>{preset.rationale}</small>
+    </article>)}</div>
+  </section>;
 }
 
 function ModelsView({ snapshot }: { snapshot: ProcedureSnapshot }) {
