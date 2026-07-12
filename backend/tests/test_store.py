@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+
+from consciousness.context import assemble_prompt
 from consciousness.llm import choose_model
-from consciousness.models import RunStatus
+from consciousness.maintenance import upgrade_bundled_profile
+from consciousness.models import ContextManifest, RunStatus
 from consciousness.runner import run_once
 from consciousness.store import ConsciousnessStore
 
@@ -19,6 +23,63 @@ def test_store_seeds_strong_loop(tmp_path):
     assert store.current_state().id == "gather"
 
 
+def test_store_reconciles_execution_mode_when_reopening_database(tmp_path):
+    database_path = tmp_path / "consciousness.db"
+    preview_store = ConsciousnessStore(database_path, execution_mode="preview")
+    preview_store.setup()
+
+    live_store = ConsciousnessStore(database_path, execution_mode="live")
+    live_store.setup()
+
+    assert live_store.runtime().execution_mode == "live"
+    mode_events = [
+        event for event in live_store.list_events(limit=50)
+        if event.event_type == "runtime.execution_mode"
+    ]
+    assert len(mode_events) == 1
+    assert mode_events[0].payload == {"previous": "preview", "current": "live"}
+
+    live_store.setup()
+    assert len([
+        event for event in live_store.list_events(limit=50)
+        if event.event_type == "runtime.execution_mode"
+    ]) == 1
+
+
+def test_bundled_profile_upgrade_is_versioned_audited_and_idempotent(tmp_path):
+    store = ConsciousnessStore(tmp_path / "consciousness.db")
+    store.setup()
+    draft = store.create_draft()
+    definition = draft.definition.model_copy(deep=True)
+    next(state for state in definition.states if state.id == "curate").tools = [
+        "only_memories.reinforce_connection"
+    ]
+    definition.models = [model for model in definition.models if model.id != "local/qwen3.5-9b"]
+    definition.models[0].id = "local/llama-3.1-8b-instruct"
+    definition.models[0].provider = "ollama"
+    definition.models[0].model = "llama-3.1-8b-instruct"
+    updated = store.update_draft(draft.id, definition, expected_revision=draft.revision)
+    store.activate_version(updated.id, rationale="test legacy profile")
+    store.set_current_state("validate")
+    mutations_before = len(store.list_mutations())
+    recaps_before = len(store.list_recaps())
+
+    upgraded = upgrade_bundled_profile(store)
+
+    assert upgraded is not None
+    assert store.current_state().id == "validate"
+    assert next(state for state in upgraded.definition.states if state.id == "curate").tools == [
+        "only_memories.search",
+        "only_memories.navigate",
+        "only_memories.versions",
+    ]
+    assert "local/qwen3.5-9b" in {model.id for model in upgraded.definition.models}
+    assert "local/llama-3.1-8b-instruct" not in {model.id for model in upgraded.definition.models}
+    assert len(store.list_mutations()) == mutations_before + 1
+    assert len(store.list_recaps()) == recaps_before + 1
+    assert upgrade_bundled_profile(store) is None
+
+
 def test_choose_model_prefers_cheapest_sufficient_model(tmp_path):
     store = ConsciousnessStore(tmp_path / "consciousness.db")
     store.setup()
@@ -28,6 +89,30 @@ def test_choose_model_prefers_cheapest_sufficient_model(tmp_path):
 
     assert model.context_window >= state.context_minimum
     assert model.relative_cost <= 1.0
+
+
+def test_starter_local_model_can_execute_every_state(tmp_path):
+    store = ConsciousnessStore(tmp_path / "consciousness.db")
+    store.setup()
+
+    selected = {
+        choose_model(state, store.list_models(), local_only=True).id
+        for state in store.snapshot().states
+    }
+
+    assert selected == {"local/qwen3.5-9b"}
+
+
+def test_prompt_requires_run_output_envelope(tmp_path):
+    store = ConsciousnessStore(tmp_path / "consciousness.db")
+    store.setup()
+
+    instructions, input_text = assemble_prompt(store.get_state("gather"), ContextManifest(), None)
+    envelope = json.loads(input_text)["required_result_envelope"]
+
+    assert "Do not return the state payload at the top level" in instructions
+    assert envelope["next_transition_recommendation"] == "curate"
+    assert envelope["payload"]["kind"] == "context_bundle"
 
 
 def test_run_once_advances_state_and_records_run(tmp_path, monkeypatch):

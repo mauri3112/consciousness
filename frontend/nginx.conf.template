@@ -1,0 +1,19 @@
+server {
+  listen 80;
+  server_name _;
+  root /usr/share/nginx/html;
+
+  location /api/ {
+    proxy_pass ${CONSCIOUSNESS_API_UPSTREAM};
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Authorization "Bearer ${CONSCIOUSNESS_API_TOKEN}";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+  }
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}

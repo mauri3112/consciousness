@@ -185,6 +185,9 @@ class MemoryChange(BaseModel):
     content: str | None = None
     reason: str
     source_ids: list[str] = Field(default_factory=list)
+    source_id: str | None = None
+    target_id: str | None = None
+    amount: float | None = Field(default=None, gt=0, le=1)
     requires_approval: bool = False
 
 
@@ -218,6 +221,9 @@ class PublishReceipt(BaseModel):
     kind: Literal["publish_receipt"] = "publish_receipt"
     applied: list[str] = Field(default_factory=list)
     pending_approval_ids: list[str] = Field(default_factory=list)
+    proposal_run_id: str | None = None
+    validation_run_id: str | None = None
+    skipped_reason: str | None = None
 
 
 class AuditDecision(BaseModel):
@@ -254,6 +260,7 @@ class ContextManifest(BaseModel):
     total_estimated_tokens: int = 0
     reserved_output_tokens: int = 0
     truncated: bool = False
+    unresolved_risks: list[str] = Field(default_factory=list)
 
 
 class RunRecord(BaseModel):

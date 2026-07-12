@@ -8,6 +8,10 @@ import httpx
 from .models import RunRecord
 
 
+class RemoteWriteUncertain(RuntimeError):
+    """The remote server may have committed a write before the response failed."""
+
+
 class OnlyMemoriesClient:
     def __init__(self, base_url: str, timeout: float = 5.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -18,10 +22,28 @@ class OnlyMemoriesClient:
         response.raise_for_status()
         return response.json()
 
-    def search(self, query: str, limit: int = 8) -> dict[str, Any]:
+    def search(
+        self,
+        query: str,
+        limit: int = 8,
+        *,
+        memory_type: str | None = None,
+        scope: str = "general",
+        include_forgotten: bool = False,
+        include_expired: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "query": query,
+            "limit": limit,
+            "scope": scope,
+            "include_forgotten": include_forgotten,
+            "include_expired": include_expired,
+        }
+        if memory_type is not None:
+            payload["type"] = memory_type
         response = httpx.post(
             f"{self.base_url}/search",
-            json={"query": query, "limit": limit},
+            json=payload,
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -41,33 +63,54 @@ class OnlyMemoriesClient:
         response.raise_for_status()
         return response.json()
 
-    def remember(self, payload: dict[str, Any]) -> dict[str, Any]:
-        response = httpx.post(f"{self.base_url}/memories", json=payload, timeout=self.timeout)
-        response.raise_for_status()
-        return response.json()
+    def _write(
+        self,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        request_kwargs: dict[str, Any] = {"timeout": self.timeout}
+        if payload is not None:
+            request_kwargs["json"] = payload
+        if idempotency_key:
+            request_kwargs["headers"] = {"Idempotency-Key": idempotency_key}
+        try:
+            response = httpx.post(f"{self.base_url}{path}", **request_kwargs)
+            response.raise_for_status()
+            return response.json()
+        except (httpx.TimeoutException, httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError) as exc:
+            raise RemoteWriteUncertain(str(exc)) from exc
 
-    def forget(self, memory_id: str, reason: str | None = None) -> dict[str, Any]:
-        response = httpx.post(
-            f"{self.base_url}/memories/{memory_id}/forget",
-            json={"reason": reason} if reason else {},
-            timeout=self.timeout,
+    def remember(self, payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return self._write("/memories", payload=payload, idempotency_key=idempotency_key)
+
+    def supersede(self, memory_id: str, payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return self.remember({**payload, "supersedes_id": memory_id}, idempotency_key)
+
+    def forget(self, memory_id: str, reason: str | None = None, idempotency_key: str | None = None) -> dict[str, Any]:
+        return self._write(
+            f"/memories/{memory_id}/forget",
+            payload={"reason": reason} if reason else {},
+            idempotency_key=idempotency_key,
         )
-        response.raise_for_status()
-        return response.json()
 
-    def restore(self, memory_id: str) -> dict[str, Any]:
-        response = httpx.post(f"{self.base_url}/memories/{memory_id}/restore", timeout=self.timeout)
-        response.raise_for_status()
-        return response.json()
+    def restore(self, memory_id: str, idempotency_key: str | None = None) -> dict[str, Any]:
+        return self._write(f"/memories/{memory_id}/restore", idempotency_key=idempotency_key)
 
-    def reinforce(self, source_id: str, target_id: str, amount: float, reason: str) -> dict[str, Any]:
-        response = httpx.post(
-            f"{self.base_url}/connections/reinforce",
-            json={"source_id": source_id, "target_id": target_id, "amount": amount, "reason": reason},
-            timeout=self.timeout,
+    def reinforce(
+        self,
+        source_id: str,
+        target_id: str,
+        amount: float,
+        reason: str,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        return self._write(
+            "/connections/reinforce",
+            payload={"source_id": source_id, "target_id": target_id, "amount": amount, "reason": reason},
+            idempotency_key=idempotency_key,
         )
-        response.raise_for_status()
-        return response.json()
 
     def remember_run_recap(self, run: RunRecord, state_name: str) -> dict[str, Any]:
         response = httpx.post(

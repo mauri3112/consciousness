@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import {
   activateDraft, createDraft, decideApproval, eventStreamUrl, exportUrl, fetchDiff,
-  fetchProcedure, fetchRunEvents, importProcedure, issueControl, rollbackVersion,
+  fetchCommand, fetchProcedure, fetchRunEvents, importProcedure, issueControl, rollbackVersion,
   saveDraft, validateDraft, type ApprovalRecord, type ProcedureDefinition,
   type ProcedureSnapshot, type ProcedureState, type ProcedureVersion, type RunRecord
 } from "./api";
@@ -94,11 +94,43 @@ function Sidebar({ view, onView, snapshot }: { view: View; onView: (view: View) 
 
 function TopBar({ snapshot, onRefresh }: { snapshot: ProcedureSnapshot; onRefresh: () => void }) {
   const client = useQueryClient();
+  const [stepCommandId, setStepCommandId] = useState<number | null>(null);
+  const stepSubmissionRef = useRef(false);
+  const stepCommand = useQuery({
+    queryKey: ["runtime-command", stepCommandId],
+    queryFn: () => fetchCommand(stepCommandId!),
+    enabled: stepCommandId !== null,
+    refetchInterval: 500
+  });
   const control = useMutation({
     mutationFn: issueControl,
-    onSuccess: () => setTimeout(() => client.invalidateQueries({ queryKey: ["procedure"] }), 400)
+    onSuccess: (command) => {
+      if (command.kind === "step") setStepCommandId(command.id);
+      setTimeout(() => client.invalidateQueries({ queryKey: ["procedure"] }), 400);
+    },
+    onError: (_error, kind) => {
+      if (kind === "step") stepSubmissionRef.current = false;
+    }
   });
   const status = snapshot.runtime.status;
+  const stepPending = stepCommand.data?.status === "pending" || stepCommand.data?.status === "claimed";
+  const controlError = stepCommand.data?.status === "failed"
+    ? stepCommand.data.error ?? "Step command failed."
+    : control.error instanceof Error
+      ? control.error.message
+      : stepCommand.error instanceof Error
+        ? stepCommand.error.message
+        : null;
+  useEffect(() => {
+    if (stepCommand.data && ["completed", "failed"].includes(stepCommand.data.status)) {
+      stepSubmissionRef.current = false;
+    }
+  }, [stepCommand.data]);
+  function issueStep() {
+    if (stepSubmissionRef.current) return;
+    stepSubmissionRef.current = true;
+    control.mutate("step");
+  }
   return (
     <header className="topbar">
       <div className="procedure-name"><span>Procedure</span><strong>{snapshot.version.definition.name}</strong><em>v{snapshot.version.version}</em></div>
@@ -106,11 +138,12 @@ function TopBar({ snapshot, onRefresh }: { snapshot: ProcedureSnapshot; onRefres
       <div className="toolbar">
         <button aria-label="Refresh procedure status" title="Refresh" onClick={onRefresh}><RefreshCw aria-hidden="true" size={15} /><span>Refresh</span></button>
         <button aria-label="Pause runtime" title="Pause" onClick={() => control.mutate("pause")}><Pause aria-hidden="true" size={15} /><span>Pause</span></button>
-        <button className="primary" onClick={() => control.mutate("step")} disabled={control.isPending}><Play size={15} />Step</button>
+        <button className="primary" onClick={issueStep} disabled={control.isPending || stepPending} aria-describedby={controlError ? "runtime-control-error" : undefined}><Play size={15} />{stepPending ? `Step #${stepCommandId}` : "Step"}</button>
         <button title={status === "running" ? "Stop" : "Run continuously"} onClick={() => control.mutate(status === "running" ? "stop" : "run")}>
           {status === "running" ? <Square size={14} /> : <Activity size={15} />}<span>{status === "running" ? "Stop" : "Continuous"}</span>
         </button>
       </div>
+      {controlError ? <div className="control-error" id="runtime-control-error" role="alert"><AlertTriangle aria-hidden="true" size={14} />{controlError}</div> : null}
     </header>
   );
 }

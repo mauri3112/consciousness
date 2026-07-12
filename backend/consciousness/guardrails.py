@@ -16,13 +16,13 @@ def default_guardrails() -> GuardrailSnapshot:
             CapabilityPolicy(
                 state_id="curate",
                 allowed_tool_patterns=[
-                    "only_memories.remember",
-                    "only_memories.forget",
-                    "only_memories.reinforce_connection",
+                    "only_memories.search",
+                    "only_memories.navigate",
+                    "only_memories.versions",
                 ],
-                mutation_level="memory_proposal",
-                requires_approval=True,
-                rationale="Curate can propose lifecycle changes, but reversible forgetting and merges need evidence.",
+                mutation_level="read_only",
+                requires_approval=False,
+                rationale="Curate inspects memory context and expresses lifecycle proposals only through structured output.",
             ),
             CapabilityPolicy(
                 state_id="synthesize",
@@ -42,6 +42,7 @@ def default_guardrails() -> GuardrailSnapshot:
                 state_id="publish",
                 allowed_tool_patterns=[
                     "only_memories.remember",
+                    "only_memories.supersede",
                     "only_memories.forget",
                     "only_memories.restore",
                     "only_memories.reinforce",

@@ -281,7 +281,7 @@ class OllamaProvider(ModelProvider):
             {"role": "user", "content": request.input_text},
         ]
         totals = _UsageTotals()
-        repaired = False
+        repair_attempts = 0
         for _ in range(8):
             _check_cancelled(request)
             body = self._ollama_chat(request, messages)
@@ -302,16 +302,22 @@ class OllamaProvider(ModelProvider):
 
             content = message.get("content", "")
             try:
-                output = RunOutput.model_validate_json(content)
+                output = _parse_run_output(content)
             except (ValidationError, json.JSONDecodeError, ValueError) as exc:
-                if repaired:
+                if repair_attempts >= 2:
                     raise ProviderError("invalid_output", f"Ollama schema repair failed: {exc}") from exc
-                repaired = True
+                repair_attempts += 1
                 messages.append(message)
                 messages.append(
                     {
                         "role": "user",
-                        "content": "Repair the previous response to match the required JSON schema. Return JSON only.",
+                        "content": (
+                            "Repair the previous response to match the RunOutput JSON schema. "
+                            f"Validation error: {exc}. Return JSON only. Required top-level keys are "
+                            "summary, confidence, changed_resources, source_links, unresolved_risks, "
+                            "next_transition_recommendation, and payload. Do not return the state payload "
+                            f"at the top level. {_ollama_payload_repair_hint(request.state.kind)}"
+                        ),
                     }
                 )
                 continue
@@ -323,9 +329,22 @@ class OllamaProvider(ModelProvider):
         payload: dict[str, Any] = {
             "model": request.model.model,
             "stream": False,
+            "think": False,
             "format": RunOutput.model_json_schema(),
             "messages": messages,
-            "options": {"temperature": 0},
+            "options": {
+                "temperature": 0,
+                "num_ctx": min(
+                    request.model.context_window,
+                    max(
+                        8_192,
+                        request.context.total_estimated_tokens
+                        + request.context.reserved_output_tokens
+                        + len(request.instructions) // 4
+                        + len(request.input_text) // 4,
+                    ),
+                ),
+            },
         }
         if request.tools:
             payload["tools"] = [
@@ -351,6 +370,32 @@ class OllamaProvider(ModelProvider):
             raise ProviderError("unavailable", str(exc), retryable=True) from exc
         except (json.JSONDecodeError, ValueError) as exc:
             raise ProviderError("invalid_response", f"Ollama returned an invalid HTTP response: {exc}") from exc
+
+
+def _ollama_payload_repair_hint(state_kind: str) -> str:
+    if state_kind == "validate":
+        return (
+            'For Validate, payload must be shaped exactly like '
+            '{"kind":"validation_report","sufficient_evidence":true,"findings":['
+            '{"change_index":0,"accepted":true,"reason":"evidence supports the change",'
+            '"evidence_ids":[]}]}. Every findings item requires change_index, accepted, reason, '
+            "and evidence_ids; never use label or confidence inside findings."
+        )
+    return "Keep the payload kind and fields exactly as shown in required_result_envelope."
+
+
+def _parse_run_output(content: str) -> RunOutput:
+    try:
+        return RunOutput.model_validate_json(content)
+    except ValidationError as original:
+        stripped = content.strip()
+        try:
+            value, end = json.JSONDecoder().raw_decode(stripped)
+        except (json.JSONDecodeError, ValueError):
+            raise original
+        if stripped[end:].strip() != ",":
+            raise original
+        return RunOutput.model_validate(value)
 
 
 @dataclass(slots=True)

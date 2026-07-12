@@ -8,11 +8,11 @@ from typing import Any, Callable
 
 from .artifacts import ArtifactStore
 from .models import CapabilityPolicy, SourceLink, ToolCallRecord
-from .only_memories import OnlyMemoriesClient
+from .only_memories import OnlyMemoriesClient, RemoteWriteUncertain
 from .store import ConsciousnessStore
 
 
-ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
+ToolHandler = Callable[[dict[str, Any], str], dict[str, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +98,10 @@ class ToolRegistry:
             return ToolExecution(status="uncertain", result=call.result)
         self.store.start_tool_call(call.id)
         try:
-            result = tool.handler(arguments)
+            result = tool.handler(arguments, call.idempotency_key)
+        except RemoteWriteUncertain as exc:
+            self.store.finish_tool_call(call.id, "uncertain", {"error": str(exc), "reconciliation_required": True})
+            return ToolExecution(status="uncertain", result={"error": str(exc), "reconciliation_required": True})
         except Exception as exc:
             self.store.finish_tool_call(call.id, "failed", {"error": str(exc)})
             raise
@@ -115,7 +118,11 @@ class ToolRegistry:
             return ToolExecution(status="uncertain", result=call.result, approval_id=call.approval_id)
         self.store.start_tool_call(call.id)
         try:
-            result = tool.handler(call.arguments)
+            result = tool.handler(call.arguments, call.idempotency_key)
+        except RemoteWriteUncertain as exc:
+            result = {"error": str(exc), "reconciliation_required": True}
+            self.store.finish_tool_call(call.id, "uncertain", result)
+            return ToolExecution(status="uncertain", result=result, approval_id=call.approval_id)
         except Exception as exc:
             self.store.finish_tool_call(call.id, "failed", {"error": str(exc)})
             raise
@@ -134,14 +141,15 @@ def build_tool_registry(
     registry = ToolRegistry(store)
 
     if only_memories:
-        registry.register(ToolDefinition("only_memories.health", "Check memory service health.", _object_schema({}), "read_only", True, lambda _: only_memories.health()))
-        registry.register(ToolDefinition("only_memories.search", "Search ranked memories.", _object_schema({"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1}}, required=["query", "limit"]), "read_only", True, lambda args: only_memories.search(str(args["query"]), int(args.get("limit", 8)))))
-        registry.register(ToolDefinition("only_memories.navigate", "Navigate memory connections.", _object_schema({"memory_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1}}, required=["memory_id", "limit"]), "read_only", True, lambda args: only_memories.navigate(str(args["memory_id"]), int(args.get("limit", 8)))))
-        registry.register(ToolDefinition("only_memories.versions", "Read memory versions.", _object_schema({"memory_id": {"type": "string"}}), "read_only", True, lambda args: only_memories.versions(str(args["memory_id"]))))
-        registry.register(ToolDefinition("only_memories.remember", "Create an additive memory.", _object_schema({"content": {"type": "string"}}), "additive_memory", True, lambda args: only_memories.remember(args)))
-        registry.register(ToolDefinition("only_memories.forget", "Soft-forget a memory.", _object_schema({"memory_id": {"type": "string"}}), "destructive_memory", True, lambda args: only_memories.forget(str(args["memory_id"]), args.get("reason"))))
-        registry.register(ToolDefinition("only_memories.restore", "Restore a memory.", _object_schema({"memory_id": {"type": "string"}}), "additive_memory", True, lambda args: only_memories.restore(str(args["memory_id"]))))
-        registry.register(ToolDefinition("only_memories.reinforce", "Reinforce a memory edge.", _object_schema({"source_id": {"type": "string"}, "target_id": {"type": "string"}}), "additive_memory", True, lambda args: only_memories.reinforce(str(args["source_id"]), str(args["target_id"]), float(args.get("amount", 0.1)), str(args.get("reason", "consciousness validation")))))
+        registry.register(ToolDefinition("only_memories.health", "Check memory service health.", _object_schema({}), "read_only", True, lambda _args, _key: only_memories.health()))
+        registry.register(ToolDefinition("only_memories.search", "Search ranked memories.", _object_schema({"query": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "type": {"type": "string", "enum": _MEMORY_TYPES}, "scope": {"type": "string", "enum": ["general", "remembering"]}, "include_forgotten": {"type": "boolean"}, "include_expired": {"type": "boolean"}}, required=["query"]), "read_only", True, lambda args, _key: only_memories.search(str(args["query"]), int(args.get("limit", 10)), memory_type=args.get("type"), scope=str(args.get("scope", "general")), include_forgotten=bool(args.get("include_forgotten", False)), include_expired=bool(args.get("include_expired", False)))))
+        registry.register(ToolDefinition("only_memories.navigate", "Navigate memory connections.", _object_schema({"memory_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1}}, required=["memory_id"]), "read_only", True, lambda args, _key: only_memories.navigate(str(args["memory_id"]), int(args.get("limit", 10)))))
+        registry.register(ToolDefinition("only_memories.versions", "Read memory versions.", _object_schema({"memory_id": {"type": "string"}}), "read_only", True, lambda args, _key: only_memories.versions(str(args["memory_id"]))))
+        registry.register(ToolDefinition("only_memories.remember", "Create an additive memory.", _memory_create_schema(), "additive_memory", True, lambda args, key: only_memories.remember(args, key)))
+        registry.register(ToolDefinition("only_memories.supersede", "Create a replacement and supersede an existing memory.", _supersede_schema(), "destructive_memory", True, lambda args, key: only_memories.supersede(str(args["memory_id"]), {name: value for name, value in args.items() if name != "memory_id"}, key)))
+        registry.register(ToolDefinition("only_memories.forget", "Soft-forget a memory.", _object_schema({"memory_id": {"type": "string"}, "reason": {"type": "string"}}, required=["memory_id"]), "destructive_memory", True, lambda args, key: only_memories.forget(str(args["memory_id"]), args.get("reason"), key)))
+        registry.register(ToolDefinition("only_memories.restore", "Restore a memory.", _object_schema({"memory_id": {"type": "string"}}), "additive_memory", True, lambda args, key: only_memories.restore(str(args["memory_id"]), key)))
+        registry.register(ToolDefinition("only_memories.reinforce", "Reinforce a memory edge.", _object_schema({"source_id": {"type": "string"}, "target_id": {"type": "string"}, "amount": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}, "reason": {"type": "string"}}, required=["source_id", "target_id"]), "additive_memory", True, lambda args, key: only_memories.reinforce(str(args["source_id"]), str(args["target_id"]), float(args.get("amount", 0.1)), str(args.get("reason", "reinforced")), key)))
 
     registry.register(
         ToolDefinition(
@@ -156,7 +164,7 @@ def build_tool_registry(
             ),
             "artifact_write",
             True,
-            lambda args: artifacts.write_text(
+            lambda args, _key: artifacts.write_text(
                 str(args["run_id"]),
                 str(args["filename"]),
                 str(args["content"]),
@@ -180,3 +188,59 @@ def _object_schema(
         "required": list(properties) if required is None else required,
         "additionalProperties": False,
     }
+
+
+_MEMORY_TYPES = [
+    "axiom", "preference", "project", "person", "decision", "concept", "source",
+    "task", "event", "artifact", "skill", "system", "note",
+]
+_CADENCES = ["none", "daily", "weekly", "monthly", "seasonal"]
+_MEMORY_RELATIONS = ["related", "updates", "extends", "derives", "supports"]
+
+
+def _memory_create_properties() -> dict[str, dict[str, Any]]:
+    source_link = {
+        "type": "object",
+        "properties": {
+            "label": {"type": "string", "minLength": 1},
+            "kind": {"type": "string", "minLength": 1},
+            "uri": {"type": "string", "minLength": 1},
+            "open_hint": {"type": ["string", "null"]},
+            "metadata": {"type": "object"},
+        },
+        "required": ["label", "uri"],
+        "additionalProperties": False,
+    }
+    connection = {
+        "type": "object",
+        "properties": {
+            "target_id": {"type": "string"},
+            "weight": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string"},
+            "relation": {"type": "string", "enum": _MEMORY_RELATIONS},
+        },
+        "required": ["target_id"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": {"type": "string", "enum": _MEMORY_TYPES},
+        "content": {"type": "string", "minLength": 1},
+        "happened_at": {"type": ["string", "null"], "format": "date-time"},
+        "source": {"type": "string"},
+        "source_links": {"type": "array", "items": source_link},
+        "cadence": {"type": "string", "enum": _CADENCES},
+        "expires_at": {"type": ["string", "null"], "format": "date-time"},
+        "base_importance": {"type": "number", "minimum": 0, "maximum": 1},
+        "axiom_key": {"type": ["string", "null"]},
+        "metadata": {"type": "object"},
+        "connections": {"type": "array", "items": connection},
+    }
+
+
+def _memory_create_schema() -> dict[str, Any]:
+    return _object_schema(_memory_create_properties(), required=["content"])
+
+
+def _supersede_schema() -> dict[str, Any]:
+    properties = {"memory_id": {"type": "string"}, **_memory_create_properties()}
+    return _object_schema(properties, required=["memory_id", "content"])

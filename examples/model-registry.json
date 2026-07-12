@@ -1,25 +1,13 @@
 [
   {
-    "id": "local/llama-3.1-8b-instruct",
+    "id": "local/qwen3.5-9b",
     "provider": "ollama",
-    "model": "llama3.1:8b-instruct",
-    "context_window": 32768,
+    "model": "qwen3.5:9b",
+    "context_window": 262144,
     "relative_cost": 0,
     "max_run_budget": 0,
-    "quality_tier": 1,
-    "strengths": ["classification", "simple-maintenance", "offline"],
-    "capabilities": ["structured-output"],
-    "open_weights": true
-  },
-  {
-    "id": "local/qwen2.5-14b-instruct",
-    "provider": "ollama",
-    "model": "qwen2.5:14b-instruct",
-    "context_window": 65536,
-    "relative_cost": 0,
-    "max_run_budget": 0,
-    "quality_tier": 2,
-    "strengths": ["curation", "structured-output", "offline"],
+    "quality_tier": 3,
+    "strengths": ["classification", "curation", "structured-output", "procedure-design", "offline"],
     "capabilities": ["structured-output", "tool-calling"],
     "open_weights": true
   },

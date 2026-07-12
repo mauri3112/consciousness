@@ -59,6 +59,17 @@ def test_stale_draft_revision_is_rejected(store: ConsciousnessStore):
         store.update_draft(draft.id, draft.definition, expected_revision=1)
 
 
+def test_stale_draft_parent_cannot_replace_newer_active_version(store: ConsciousnessStore):
+    first = store.create_draft()
+    stale = store.create_draft()
+
+    store.activate_version(first.id)
+
+    with pytest.raises(RuntimeError, match="stale_procedure_parent"):
+        store.activate_version(stale.id)
+    assert store.current_version().id == first.id
+
+
 def test_invalid_graph_is_rejected(store: ConsciousnessStore):
     definition = store.current_version().definition.model_copy(deep=True)
     definition.transitions = [edge for edge in definition.transitions if edge.source_id != "gather"]
@@ -78,6 +89,18 @@ def test_worker_lease_commands_and_recovery_are_durable(store: ConsciousnessStor
     assert claimed and claimed.id == command.id
     assert store.complete_command(command.id).status == "completed"
     assert store.set_runtime_status(RuntimeStatus.paused).status == RuntimeStatus.paused
+
+
+def test_pending_step_commands_are_deduplicated(store: ConsciousnessStore):
+    first = store.enqueue_command(CommandKind.step)
+    duplicate = store.enqueue_command(CommandKind.step)
+
+    assert duplicate.id == first.id
+    with store.connect() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM runtime_commands WHERE kind = 'step' AND status IN ('pending', 'claimed')"
+        ).fetchone()[0]
+    assert count == 1
 
 
 def test_lease_is_renewed_during_long_running_work(store: ConsciousnessStore):

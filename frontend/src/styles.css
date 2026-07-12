@@ -70,6 +70,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .pulse.degraded, .pulse.budget_blocked { background: var(--amber); }
 .toolbar, .editor-toolbar > div:last-child, .decision-buttons { display: flex; align-items: stretch; justify-content: flex-end; }
 .toolbar { border-left: 1px solid var(--line); }
+.control-error { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 7px 14px; color: var(--red); background: rgba(239,107,100,.07); border-top: 1px solid rgba(239,107,100,.4); font: 9px/1.4 var(--mono); }
 button, .button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 12px; color: #c8ccc4; text-decoration: none; text-transform: uppercase; border: 1px solid var(--line); border-radius: var(--radius); background: #111515; font: 9px/1 var(--mono); letter-spacing: .07em; }
 button:hover, .button:hover { color: var(--text); border-color: var(--line-bright); background: #191e1d; }
 .toolbar button { min-width: 76px; height: 77px; flex-direction: column; gap: 8px; border-width: 0 0 0 1px; border-radius: 0; background: transparent; }
@@ -258,10 +259,10 @@ button:disabled { cursor: wait; opacity: .48; }
 
 @media (max-width: 780px) {
   .app-shell { display: block; padding-bottom: 74px; }
-  .sidebar { position: fixed; z-index: 50; top: auto; right: 0; bottom: 0; left: 0; display: flex; flex-direction: row; width: auto; height: 74px; padding: 7px; overflow-x: auto; border-top: 1px solid var(--line); border-right: 0; }
+  .sidebar { position: fixed; z-index: 50; top: auto; right: 0; bottom: 0; left: 0; display: flex; flex-direction: row; width: auto; height: 74px; padding: 7px; overflow-x: auto; scroll-padding-inline: 7px; border-top: 1px solid var(--line); border-right: 0; }
   .brand, .sidebar-foot, .nav-group p { display: none; }
   .sidebar nav, .nav-group { display: flex; margin: 0; }
-  .overview-link, .nav-group button { flex: 0 0 58px; min-height: 56px; margin: 0; }
+  .overview-link, .nav-group button { flex: 1 1 0; min-width: 44px; min-height: 56px; margin: 0; padding: 0; }
   .overview-link::before, .nav-group button::before { top: auto; right: 8px; bottom: -7px; left: 8px; width: auto; height: 2px; }
   .topbar { grid-template-columns: 1fr auto; height: auto; min-height: 66px; }
   .procedure-name { padding: 0 12px; }

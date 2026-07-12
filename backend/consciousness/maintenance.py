@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import get_settings
+from .guardrails import default_guardrails
+from .models import ModelProfile, ProcedureVersion
 from .operations import redact
+from .seed import STARTER_MODELS, STARTER_STATES
 from .store import ConsciousnessStore
 
 
@@ -54,3 +57,68 @@ def vacuum_cli() -> None:
     with store.connect() as conn:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.execute("VACUUM")
+
+
+def upgrade_bundled_profile(store: ConsciousnessStore) -> ProcedureVersion | None:
+    """Version bundled memory-safety/profile changes into an existing database."""
+    active = store.current_version()
+    definition = active.definition.model_copy(deep=True)
+    runtime = store.runtime()
+    changes: list[dict[str, object]] = []
+    starter_states = {str(item["id"]): item for item in STARTER_STATES}
+    for state in definition.states:
+        state.is_current = state.id == runtime.current_state_id
+        if state.id in {"curate", "publish"}:
+            tools = list(starter_states[state.id]["tools"])
+            if state.tools != tools:
+                changes.append({"kind": "state-tools", "state_id": state.id, "before": state.tools, "after": tools})
+                state.tools = tools
+
+    defaults = {item.state_id: item for item in default_guardrails().capability_policies}
+    for index, policy in enumerate(definition.guardrails.capability_policies):
+        if policy.state_id in {"curate", "publish"} and policy != defaults[policy.state_id]:
+            changes.append({"kind": "capability-policy", "state_id": policy.state_id})
+            definition.guardrails.capability_policies[index] = defaults[policy.state_id]
+
+    legacy_local_ids = {"local/llama-3.1-8b-instruct", "local/qwen2.5-14b-instruct"}
+    legacy_models = [model.id for model in definition.models if model.id in legacy_local_ids]
+    if legacy_models:
+        definition.models = [model for model in definition.models if model.id not in legacy_local_ids]
+        changes.append({"kind": "remove-legacy-model-profiles", "model_ids": legacy_models})
+    local_model = ModelProfile.model_validate(STARTER_MODELS[0])
+    if all(model.id != local_model.id for model in definition.models):
+        definition.models.append(local_model)
+        changes.append({"kind": "model-profile", "model_id": local_model.id})
+    if not changes:
+        return None
+
+    draft = store.create_draft(active.id)
+    updated = store.update_draft(draft.id, definition, expected_revision=draft.revision)
+    errors = store.validate_version(updated.id)
+    if errors:
+        raise RuntimeError("bundled profile upgrade is invalid: " + "; ".join(errors))
+    activated = store.activate_version(
+        updated.id,
+        rationale="upgrade bundled only-memories safety and local Ollama profile",
+    )
+    store.add_recap(
+        run_id=None,
+        auditor_model_id="operator-maintenance",
+        summary="Applied bundled only-memories safety and qwen3.5:9b profile to the persistent procedure.",
+        decision="activate_version",
+        procedure_changes=changes,
+    )
+    return activated
+
+
+def upgrade_bundled_profile_cli() -> None:
+    settings = get_settings()
+    parser = argparse.ArgumentParser(description="Version bundled safety/profile changes into an existing database.")
+    parser.add_argument("--apply", action="store_true", help="Required to activate a new auditable procedure version.")
+    args = parser.parse_args()
+    if not args.apply:
+        parser.error("--apply is required")
+    store = ConsciousnessStore(settings.database_path, execution_mode=settings.execution_mode)
+    store.setup()
+    version = upgrade_bundled_profile(store)
+    print(json.dumps({"status": "unchanged" if version is None else "activated", "version_id": version.id if version else store.current_version().id}))

@@ -82,6 +82,11 @@ const mutationSchema = z.object({
   status: z.string(), diff: z.string(), rationale: z.string(), budget_impact: z.record(z.string(), z.unknown()),
   rollback_version_id: z.string(), created_at: z.string(), decided_at: z.string().nullable()
 });
+const commandSchema = z.object({
+  id: z.number(), kind: z.string(), status: z.enum(["pending", "claimed", "completed", "failed"]),
+  payload: z.record(z.string(), z.unknown()), created_at: z.string(), claimed_at: z.string().nullable(),
+  completed_at: z.string().nullable(), error: z.string().nullable()
+});
 
 export const snapshotSchema = z.object({
   version: versionSchema, runtime: runtimeSchema, states: z.array(stateSchema), transitions: z.array(transitionSchema),
@@ -99,16 +104,15 @@ export type RunRecord = z.infer<typeof runSchema>;
 export type ApprovalRecord = z.infer<typeof approvalSchema>;
 export type ProcedureSnapshot = z.infer<typeof snapshotSchema>;
 export type RunEvent = { id: number; run_id: string | null; event_type: string; payload: Record<string, unknown>; created_at: string };
+export type RuntimeCommand = z.infer<typeof commandSchema>;
 
-const API_URL = import.meta.env.VITE_CONSCIOUSNESS_API_URL ?? "http://localhost:8770";
-const API_TOKEN = import.meta.env.VITE_CONSCIOUSNESS_API_TOKEN as string | undefined;
+const API_URL = (import.meta.env.VITE_CONSCIOUSNESS_API_URL as string | undefined) ?? "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}/api/v1${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
       ...init?.headers
     }
   });
@@ -124,7 +128,11 @@ export async function fetchProcedure(): Promise<ProcedureSnapshot> {
 }
 
 export function issueControl(kind: "step" | "run" | "pause" | "resume" | "stop") {
-  return request<{ id: number; kind: string; status: string }>(`/control/${kind}`, { method: "POST" });
+  return request<RuntimeCommand>(`/control/${kind}`, { method: "POST" });
+}
+
+export async function fetchCommand(id: number) {
+  return commandSchema.parse(await request<unknown>(`/commands/${id}`));
 }
 
 export function createDraft() {

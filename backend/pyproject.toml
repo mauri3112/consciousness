@@ -33,6 +33,7 @@ consciousness-worker-health = "consciousness.health:worker_health"
 consciousness-backup = "consciousness.maintenance:backup_cli"
 consciousness-diagnostics = "consciousness.maintenance:diagnostics_cli"
 consciousness-vacuum = "consciousness.maintenance:vacuum_cli"
+consciousness-upgrade-bundled-profile = "consciousness.maintenance:upgrade_bundled_profile_cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["consciousness"]

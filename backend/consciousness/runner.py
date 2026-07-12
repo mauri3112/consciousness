@@ -19,6 +19,7 @@ from .models import (
     CapabilityPolicy,
     CommandKind,
     IntegrationStatus,
+    MemoryChange,
     MemoryChangeProposal,
     PublishReceipt,
     RunStatus,
@@ -26,6 +27,7 @@ from .models import (
     SourceLink,
     SynthesisArtifact,
     TickResult,
+    ValidationReport,
 )
 from .only_memories import OnlyMemoriesClient
 from .operations import configure_structured_logging
@@ -132,7 +134,24 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
         )
         previous_runs = [run for run in store.list_runs(limit=20) if run.status == RunStatus.succeeded]
         previous = previous_runs[0] if previous_runs else None
-        manifest = build_context_manifest(state, only_memories=only_memories, previous_runs=previous_runs)
+        try:
+            manifest = build_context_manifest(state, only_memories=only_memories, previous_runs=previous_runs)
+        except Exception as exc:
+            if state.kind != "gather" or only_memories is None:
+                raise
+            risk = f"only-memories search failed; Gather proceeded without memory evidence: {exc}"
+            store.upsert_integration(
+                IntegrationStatus(
+                    name="only-memories",
+                    status="degraded",
+                    endpoint=settings.only_memories_url,
+                    last_checked_at=utcnow(),
+                    details={"operation": "search", "error": str(exc), "unresolved_risk": risk},
+                )
+            )
+            store.add_event("integration.degraded", {"name": "only-memories", "operation": "search", "error": str(exc)})
+            manifest = build_context_manifest(state, only_memories=None, previous_runs=previous_runs)
+            manifest.unresolved_risks.append(risk)
         instructions, input_text = assemble_prompt(state, manifest, previous)
         run = store.begin_run(state, model, manifest=manifest)
         heartbeat.run_id = run.id
@@ -217,6 +236,10 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
             result.output.source_links = [
                 SourceLink(label=f"{state.name} contract", kind="procedure-state", uri=f"consciousness://states/{state.id}")
             ]
+        result.output.unresolved_risks = list(dict.fromkeys([
+            *result.output.unresolved_risks,
+            *manifest.unresolved_risks,
+        ]))
 
         cost = _calculate_cost(model.input_cost_per_million, model.output_cost_per_million, result.input_tokens, result.output_tokens)
         context_used = result.input_tokens or manifest.total_estimated_tokens
@@ -342,27 +365,54 @@ def _apply_command(store: ConsciousnessStore, kind: CommandKind) -> None:
 
 def _publish_validated_changes(store: ConsciousnessStore, registry: ToolRegistry, run_id: str, policies) -> PublishReceipt:
     proposals = [
-        run for run in store.list_runs(limit=30, state_id="curate")
-        if run.output and isinstance(run.output.payload, MemoryChangeProposal)
+        candidate
+        for candidate in store.list_runs(limit=30, state_id="curate", status=RunStatus.succeeded.value)
+        if candidate.output and isinstance(candidate.output.payload, MemoryChangeProposal)
     ]
-    if not proposals:
-        return PublishReceipt()
+    validations = [
+        candidate
+        for candidate in store.list_runs(limit=30, state_id="validate", status=RunStatus.succeeded.value)
+        if candidate.output and isinstance(candidate.output.payload, ValidationReport)
+    ]
+    proposal = next(
+        (
+            candidate
+            for candidate in proposals
+            if any(validation.started_at > candidate.started_at for validation in validations)
+        ),
+        None,
+    )
+    if proposal is None:
+        return PublishReceipt(skipped_reason="no validated memory proposal is available")
+    validation = next(
+        candidate for candidate in validations if candidate.started_at > proposal.started_at
+    )
+    prior_receipts = [
+        candidate.output.payload
+        for candidate in store.list_runs(limit=50, state_id="publish", status=RunStatus.succeeded.value)
+        if candidate.output and isinstance(candidate.output.payload, PublishReceipt)
+    ]
+    if any(receipt.proposal_run_id == proposal.id for receipt in prior_receipts):
+        return PublishReceipt(
+            proposal_run_id=proposal.id,
+            validation_run_id=validation.id,
+            skipped_reason="memory proposal was already published",
+        )
+    report = validation.output.payload
+    if not report.sufficient_evidence:
+        return PublishReceipt(
+            proposal_run_id=proposal.id,
+            validation_run_id=validation.id,
+            skipped_reason="validation reported insufficient evidence",
+        )
+    accepted_indexes = {finding.change_index for finding in report.findings if finding.accepted}
     policy = next(policy for policy in policies if policy.state_id == "publish")
     applied: list[str] = []
     pending: list[str] = []
-    for index, change in enumerate(proposals[0].output.payload.changes):
-        tool_name = f"only_memories.{change.action}"
-        arguments = change.model_dump(exclude_none=True)
-        if change.action in {"remember", "supersede"}:
-            tool_name = "only_memories.remember"
-            arguments = {
-                "type": "artifact",
-                "content": change.content,
-                "source": "consciousness",
-                "metadata": {"origin_run_id": run_id, "reason": change.reason},
-            }
-            if change.action == "supersede" and change.memory_id:
-                arguments["supersedes_id"] = change.memory_id
+    for index, change in enumerate(proposal.output.payload.changes):
+        if index not in accepted_indexes:
+            continue
+        tool_name, arguments = _memory_change_tool_call(change, proposal.id)
         execution = registry.execute(
             run_id=run_id,
             tool_name=tool_name,
@@ -374,7 +424,48 @@ def _publish_validated_changes(store: ConsciousnessStore, registry: ToolRegistry
             pending.append(execution.approval_id)
         elif execution.result:
             applied.append(str(execution.result.get("id") or tool_name))
-    return PublishReceipt(applied=applied, pending_approval_ids=pending)
+    return PublishReceipt(
+        applied=applied,
+        pending_approval_ids=pending,
+        proposal_run_id=proposal.id,
+        validation_run_id=validation.id,
+    )
+
+
+def _memory_change_tool_call(change: MemoryChange, proposal_run_id: str) -> tuple[str, dict[str, Any]]:
+    if change.action in {"remember", "supersede"}:
+        if not change.content:
+            raise ValueError(f"{change.action} change requires content")
+        arguments: dict[str, Any] = {
+            "type": "artifact",
+            "content": change.content,
+            "source": "consciousness",
+            "metadata": {"origin_run_id": proposal_run_id, "reason": change.reason},
+        }
+        if change.action == "supersede":
+            if not change.memory_id:
+                raise ValueError("supersede change requires memory_id")
+            arguments["memory_id"] = change.memory_id
+            return "only_memories.supersede", arguments
+        return "only_memories.remember", arguments
+    if change.action == "forget":
+        if not change.memory_id:
+            raise ValueError("forget change requires memory_id")
+        return "only_memories.forget", {"memory_id": change.memory_id, "reason": change.reason}
+    if change.action == "restore":
+        if not change.memory_id:
+            raise ValueError("restore change requires memory_id")
+        return "only_memories.restore", {"memory_id": change.memory_id}
+    if change.action == "reinforce":
+        if not change.source_id or not change.target_id:
+            raise ValueError("reinforce change requires source_id and target_id")
+        return "only_memories.reinforce", {
+            "source_id": change.source_id,
+            "target_id": change.target_id,
+            "amount": change.amount or 0.1,
+            "reason": change.reason,
+        }
+    raise ValueError(f"unsupported memory change action: {change.action}")
 
 
 def _execute_approved_actions(store: ConsciousnessStore, settings: Settings) -> None:

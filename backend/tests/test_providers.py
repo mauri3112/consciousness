@@ -299,7 +299,23 @@ def test_ollama_repairs_malformed_output_once(monkeypatch: pytest.MonkeyPatch) -
     assert result.output.summary == "fixed"
     assert (result.input_tokens, result.output_tokens) == (5, 3)
     assert len(calls) == 2
+    assert calls[0]["options"]["num_ctx"] == 8192
     assert calls[1]["messages"][-1]["content"].startswith("Repair the previous")
+
+
+def test_ollama_accepts_valid_output_with_one_trailing_comma(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def post(*args: Any, **kwargs: Any) -> FakeHTTPResponse:
+        calls.append(kwargs["json"])
+        return FakeHTTPResponse({"message": {"role": "assistant", "content": output("fixed").model_dump_json() + ","}})
+
+    monkeypatch.setattr(httpx, "post", post)
+
+    result = OllamaProvider("http://ollama").execute(provider_request())
+
+    assert result.output.summary == "fixed"
+    assert len(calls) == 1
 
 
 def test_ollama_local_tool_loop(monkeypatch: pytest.MonkeyPatch) -> None:

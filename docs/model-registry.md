@@ -30,9 +30,10 @@ Default preference order:
 
 | id | provider | context | cost | tier | best for |
 | --- | --- | ---: | ---: | ---: | --- |
-| `local/llama-3.1-8b-instruct` | Ollama | 32,768 | 0.0x | 1 | offline classification |
-| `local/qwen2.5-14b-instruct` | Ollama | 65,536 | 0.0x | 2 | curation and structured output |
+| `local/qwen3.5-9b` | Ollama | 262,144 | 0.0x | 3 | full offline loop, structured output, and tool calling |
 | `openai/gpt-5.6-luna` | OpenAI | operator-confirmed | configured | 3 | efficient structured work |
 | `openai/gpt-5.6-sol` | OpenAI | operator-confirmed | configured | 5 | procedure design and audits |
 
 Operators must confirm model availability, context limits, capabilities, and pricing in their registry. Pricing and model IDs are data rather than selection code so examples cannot silently become current facts.
+
+The bundled local row is verified against Ollama's published `qwen3.5:9b` metadata. Install it with `ollama pull qwen3.5:9b` before setting `CONSCIOUSNESS_EXECUTION_MODE=live`.

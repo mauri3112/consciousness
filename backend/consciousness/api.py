@@ -10,7 +10,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Reques
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .artifacts import ArtifactStore
@@ -143,6 +143,11 @@ class DraftModelUpdate(BaseModel):
     profile: ModelProfile
 
 
+class ToolCallReconciliation(BaseModel):
+    applied: bool
+    result: dict[str, object] = Field(default_factory=dict)
+
+
 def get_store() -> ConsciousnessStore:
     store = ConsciousnessStore(settings.database_path, execution_mode=settings.execution_mode)
     store.setup()
@@ -252,6 +257,13 @@ def activate_draft(version_id: str, store: ConsciousnessStore = Depends(get_stor
         return store.activate_version(version_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "not_found", "resource": "procedure_version"}) from exc
+    except RuntimeError as exc:
+        if str(exc) == "stale_procedure_parent":
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "stale_procedure_parent", "message": "The active procedure changed. Rebase this draft before activation."},
+            ) from exc
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"code": "invalid_procedure", "message": str(exc)}) from exc
 
@@ -331,6 +343,20 @@ def run_events(
 @app.get("/api/v1/runs/{run_id}/tools", response_model=list[ToolCallRecord])
 def run_tools(run_id: str, store: ConsciousnessStore = Depends(get_store)) -> list[ToolCallRecord]:
     return store.list_tool_calls(run_id)
+
+
+@app.post("/api/v1/tool-calls/{call_id}/reconcile", response_model=ToolCallRecord)
+def reconcile_tool_call(
+    call_id: str,
+    payload: ToolCallReconciliation,
+    store: ConsciousnessStore = Depends(get_store),
+) -> ToolCallRecord:
+    try:
+        return store.reconcile_tool_call(call_id, applied=payload.applied, result=payload.result)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "resource": "tool_call"}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": "tool_call_not_uncertain", "message": str(exc)}) from exc
 
 
 @app.get("/api/v1/runs/{run_id}/artifacts", response_model=list[ArtifactRecord])
@@ -413,7 +439,7 @@ def update_draft_model(
         raise HTTPException(status_code=409, detail={"code": "revision_conflict"}) from exc
 
 
-@app.post("/api/v1/models/{model_id}/test")
+@app.post("/api/v1/models/{model_id:path}/test")
 def test_model(model_id: str, store: ConsciousnessStore = Depends(get_store)):
     try:
         model = next(item for item in store.list_models() if item.id == model_id)

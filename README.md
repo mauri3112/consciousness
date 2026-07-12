@@ -2,7 +2,7 @@
 
 Consciousness is an always-running procedural loop for LLM agents.
 
-The active production roadmap and resumable task ledger live in [`docs/implementation-plan.md`](docs/implementation-plan.md).
+The active production roadmap and resumable task ledger live in [`docs/implementation-plan.md`](docs/implementation-plan.md). Installation, upgrades, recovery, and the release checklist are in [`docs/operator-runbook.md`](docs/operator-runbook.md).
 
 The project defines a strongly connected directed graph of agent states. One agent runs at a time. Each state owns a domain, goal, prompt contract, tools, skills, context budget, model policy, and output contract. When a state finishes, it writes a visible durable result so the next state, an auditor, or a restarted process can continue from the last known point.
 
@@ -91,7 +91,7 @@ Run continuously:
 curl -X POST http://localhost:8770/api/v1/control/run
 ```
 
-`CONSCIOUSNESS_EXECUTION_MODE=preview` is explicit and requires no provider. Set it to `live`, configure `OPENAI_API_KEY` or `OLLAMA_URL`, and update the model registry before live execution.
+`CONSCIOUSNESS_EXECUTION_MODE=preview` is explicit and requires no provider. For the bundled local profile, run `ollama pull qwen3.5:9b`, set the mode to `live`, and make sure `OLLAMA_URL` is reachable. OpenAI execution additionally requires `OPENAI_API_KEY` and operator-confirmed model rows.
 
 Docker:
 
@@ -100,6 +100,23 @@ docker compose up --build
 ```
 
 Docker serves the studio at `http://localhost:5174` and the API at `http://localhost:8770`.
+Compose reaches Ollama and only-memories on the host through `host.docker.internal`; local-process
+settings in `.env.example` intentionally do not override those container URLs. Use
+`.env.compose.example` as the template when Compose-specific URL overrides are needed.
+When `CONSCIOUSNESS_API_TOKEN` is set, the Studio's same-origin proxy adds it server-side for normal
+requests, live SSE updates, and procedure export. The credential is not embedded in the browser bundle.
+
+For a repeatable live Ollama cycle against the normal persistent Compose volume:
+
+```bash
+CONSCIOUSNESS_EXECUTION_MODE=live docker compose up --build --force-recreate -d
+python3 scripts/verify-live-cycle.py
+```
+
+The verifier pauses continuous execution, starts from the volume's current state, polls each durable
+step command, proves all six canonical states succeed with `local/qwen3.5-9b`, and confirms the marker
+returns to its starting state. See [`docs/operator-runbook.md`](docs/operator-runbook.md) for preflight
+and safety details.
 
 ## Project Layout
 

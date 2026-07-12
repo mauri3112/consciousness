@@ -99,6 +99,24 @@ class ConsciousnessStore:
         with self.connect() as conn:
             migrate(conn)
             self._seed_if_empty(conn)
+            runtime = conn.execute(
+                "SELECT execution_mode FROM procedure_runtime WHERE singleton = 1"
+            ).fetchone()
+            if runtime is not None and runtime["execution_mode"] != self.execution_mode:
+                now = utcnow().isoformat()
+                previous_mode = runtime["execution_mode"]
+                conn.execute(
+                    "UPDATE procedure_runtime SET execution_mode = ?, updated_at = ? WHERE singleton = 1",
+                    (self.execution_mode, now),
+                )
+                conn.execute(
+                    "INSERT INTO run_events(run_id, event_type, payload_json, created_at) VALUES (NULL, ?, ?, ?)",
+                    (
+                        "runtime.execution_mode",
+                        json.dumps({"previous": previous_mode, "current": self.execution_mode}),
+                        now,
+                    ),
+                )
 
     def integrity_check(self) -> str:
         with self.connect() as conn:
@@ -190,16 +208,24 @@ class ConsciousnessStore:
         record_mutation: bool = True,
     ) -> ProcedureVersion:
         version = self.get_version(version_id)
+        if version.status != "draft":
+            raise ValueError("only draft procedure versions can be activated")
         errors = validate_procedure(version.definition)
         if errors:
             raise ValueError("; ".join(errors))
-        base = self.current_version()
         now = utcnow()
         current = next(state.id for state in version.definition.states if state.is_current)
-        diff = self.diff_versions(base.id, version.id)
         mutation_id = make_id("mutation")
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            runtime = conn.execute(
+                "SELECT active_version_id FROM procedure_runtime WHERE singleton = 1"
+            ).fetchone()
+            active_id = str(runtime["active_version_id"])
+            if version.parent_id != active_id:
+                raise RuntimeError("stale_procedure_parent")
+            base = self.get_version(active_id)
+            diff = self.diff_versions(base.id, version.id)
             conn.execute("UPDATE procedure_versions SET status = 'superseded' WHERE status = 'active'")
             conn.execute(
                 "UPDATE procedure_versions SET status = 'active', activated_at = ? WHERE id = ?",
@@ -231,7 +257,8 @@ class ConsciousnessStore:
         target = self.get_version(version_id)
         if target.status == "draft":
             raise ValueError("cannot roll back to a draft")
-        draft = self.create_draft(target.id)
+        draft = self.create_draft()
+        draft = self.update_draft(draft.id, target.definition, expected_revision=draft.revision)
         return self.activate_version(draft.id, rationale=f"rollback to procedure version {target.version}")
 
     def diff_versions(self, base_id: str, target_id: str) -> str:
@@ -293,13 +320,25 @@ class ConsciousnessStore:
 
     def enqueue_command(self, kind: CommandKind, payload: dict[str, Any] | None = None) -> RuntimeCommand:
         now = utcnow()
+        deduplicated = False
         with self.connect() as conn:
-            cursor = conn.execute(
-                "INSERT INTO runtime_commands(kind, status, payload_json, created_at) VALUES (?, 'pending', ?, ?)",
-                (kind.value, json.dumps(payload or {}), now.isoformat()),
-            )
-            command_id = int(cursor.lastrowid)
-        self.add_event("command.queued", {"command_id": command_id, "kind": kind.value})
+            conn.execute("BEGIN IMMEDIATE")
+            if kind == CommandKind.step:
+                existing = conn.execute(
+                    "SELECT id FROM runtime_commands WHERE kind = ? AND status IN ('pending', 'claimed') ORDER BY id LIMIT 1",
+                    (kind.value,),
+                ).fetchone()
+                if existing is not None:
+                    command_id = int(existing["id"])
+                    deduplicated = True
+            if not deduplicated:
+                cursor = conn.execute(
+                    "INSERT INTO runtime_commands(kind, status, payload_json, created_at) VALUES (?, 'pending', ?, ?)",
+                    (kind.value, json.dumps(payload or {}), now.isoformat()),
+                )
+                command_id = int(cursor.lastrowid)
+        event_type = "command.deduplicated" if deduplicated else "command.queued"
+        self.add_event(event_type, {"command_id": command_id, "kind": kind.value})
         return self.get_command(command_id)
 
     def get_command(self, command_id: int) -> RuntimeCommand:
@@ -717,6 +756,31 @@ class ConsciousnessStore:
         call = self.get_tool_call(call_id)
         self.add_event("tool.finished", {"tool_call_id": call_id, "status": status}, run_id=call.run_id)
         return call
+
+    def reconcile_tool_call(
+        self,
+        call_id: str,
+        *,
+        applied: bool,
+        result: dict[str, Any],
+    ) -> ToolCallRecord:
+        call = self.get_tool_call(call_id)
+        if call.status != "uncertain":
+            raise ValueError("only uncertain tool calls can be reconciled")
+        status = "succeeded" if applied else "failed"
+        reconciled = self.finish_tool_call(
+            call_id,
+            status,
+            {**result, "reconciled": True, "remote_effect_applied": applied},
+        )
+        if applied and call.approval_id:
+            self.mark_approval_executed(call.approval_id, "Remote effect confirmed during uncertain-write reconciliation.")
+        self.add_event(
+            "tool.reconciled",
+            {"tool_call_id": call_id, "remote_effect_applied": applied},
+            run_id=call.run_id,
+        )
+        return reconciled
 
     def get_tool_call(self, call_id: str) -> ToolCallRecord:
         with self.connect() as conn:

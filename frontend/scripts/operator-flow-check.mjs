@@ -5,6 +5,8 @@ const now = new Date().toISOString();
 let decisionCount = 0;
 let rollbackCount = 0;
 let approvalStatus = "pending";
+let stepCount = 0;
+let stepStatus = "pending";
 
 const state = {
   id: "gather", name: "Gather", kind: "agent", domain: "memory", goal_template: "Gather evidence.",
@@ -60,6 +62,11 @@ await page.route("**/api/v1/procedure/versions/version-1/rollback", (route) => {
   });
 });
 await page.route("**/api/v1/events**", (route) => route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" }, body: "" }));
+await page.route("**/api/v1/control/step", (route) => {
+  stepCount += 1;
+  return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ id: 41, kind: "step", status: stepStatus, payload: {}, created_at: now, claimed_at: null, completed_at: null, error: null }) });
+});
+await page.route("**/api/v1/commands/41", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: 41, kind: "step", status: stepStatus, payload: {}, created_at: now, claimed_at: null, completed_at: stepStatus === "completed" ? now : null, error: null }) }));
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.locator(".app-shell").waitFor();
@@ -108,6 +115,16 @@ if (rollbackCount !== 1) throw new Error(`Rollback submitted ${rollbackCount} ti
 
 const allViewsReachable = await Promise.all(["Overview", "Editor", "Mutations", "Runs", "Approvals", "Models", "only-memories"].map((name) => page.getByRole("button", { name: new RegExp(`^${name}`) }).isVisible()));
 if (allViewsReachable.some((visible) => !visible)) throw new Error("A mobile navigation destination is hidden");
+const viewport = page.viewportSize();
+const navigationBoxes = await Promise.all(["Overview", "Editor", "Mutations", "Runs", "Approvals", "Models", "only-memories"].map((name) => page.getByRole("button", { name: new RegExp(`^${name}`) }).boundingBox()));
+if (!viewport || navigationBoxes.some((box) => !box || box.x < 0 || box.x + box.width > viewport.width)) throw new Error(`A mobile navigation destination is partially clipped: ${JSON.stringify(navigationBoxes)}`);
+const step = page.getByRole("button", { name: "Step" });
+await step.dblclick();
+await page.getByRole("button", { name: "Step #41" }).waitFor();
+if (stepCount !== 1) throw new Error(`Step submitted ${stepCount} times while pending`);
+if (!(await page.getByRole("button", { name: "Step #41" }).isDisabled())) throw new Error("Pending Step command did not remain disabled");
+stepStatus = "completed";
+await page.getByRole("button", { name: "Step" }).waitFor({ state: "visible" });
 if (errors.length) throw new Error(`Browser errors: ${errors.join(" | ")}`);
 
 await page.close();
@@ -121,4 +138,4 @@ await disconnected.getByRole("button", { name: "Retry connection" }).waitFor();
 await disconnected.close();
 await browser.close();
 
-console.log(JSON.stringify({ approvalSubmittedExactlyOnce: decisionCount === 1, mobileViewsReachable: true, rollbackRequiresConfirmation: true, rollbackSubmittedExactlyOnce: rollbackCount === 1, disconnectedStateRendered: true, accessibilitySmoke: accessibility }, null, 2));
+console.log(JSON.stringify({ approvalSubmittedExactlyOnce: decisionCount === 1, mobileViewsFullyVisible: true, stepSubmittedExactlyOnceWhilePending: stepCount === 1, rollbackRequiresConfirmation: true, rollbackSubmittedExactlyOnce: rollbackCount === 1, disconnectedStateRendered: true, accessibilitySmoke: accessibility }, null, 2));

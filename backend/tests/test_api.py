@@ -34,6 +34,13 @@ def test_versioned_api_supports_runtime_drafts_and_approvals(tmp_path):
         assert saved.status_code == 200
         assert saved.headers["etag"] == '"2"'
         assert client.post(f"/api/v1/procedure/drafts/{draft['id']}/validate").json() == {"valid": True, "errors": []}
+
+        stale = client.post("/api/v1/procedure/drafts").json()
+        fresh = client.post("/api/v1/procedure/drafts").json()
+        assert client.post(f"/api/v1/procedure/drafts/{fresh['id']}/activate").status_code == 200
+        conflict = client.post(f"/api/v1/procedure/drafts/{stale['id']}/activate")
+        assert conflict.status_code == 409
+        assert conflict.json()["error"]["code"] == "stale_procedure_parent"
     finally:
         app.dependency_overrides.clear()
 
@@ -110,5 +117,25 @@ def test_approval_cursor_and_sse_resume_from_last_event_id(tmp_path, monkeypatch
         invalid = client.get("/api/v1/events", headers={"Last-Event-ID": "bad"})
         assert invalid.status_code == 400
         assert invalid.json()["error"]["code"] == "invalid_event_cursor"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_model_health_route_accepts_model_ids_with_slashes(tmp_path, monkeypatch):
+    store = ConsciousnessStore(tmp_path / "api-model-health.db")
+    store.setup()
+
+    class HealthyProvider:
+        def health(self):
+            return {"status": "healthy", "model": "qwen3.5:9b"}
+
+    monkeypatch.setattr("consciousness.api.build_provider", lambda *_args, **_kwargs: HealthyProvider())
+    app.dependency_overrides[get_store] = lambda: store
+    try:
+        client = TestClient(app)
+        response = client.post("/api/v1/models/local/qwen3.5-9b/test")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "healthy", "model": "qwen3.5:9b"}
     finally:
         app.dependency_overrides.clear()
