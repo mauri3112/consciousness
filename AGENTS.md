@@ -14,6 +14,7 @@ Use `docs/implementation-plan.md` as the authoritative implementation ledger. Up
 - Treat guardrails as code and data. Capability boundaries, loop-control policy, structured run output, and artifact/source links must stay in sync with docs and UI.
 - Prefer simpler models when they satisfy the state constraints. Escalate only when failure evidence or context requirements justify it.
 - Keep the frontend as an operator console, not a marketing page. Dense, readable, inspectable UI beats decorative presentation.
+- After every completed change run, commit the changes from that run directly to `main` once verification succeeds. Do not leave completed change runs uncommitted.
 
 ## Integration Contracts
 
