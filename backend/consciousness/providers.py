@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from threading import Event
@@ -510,10 +511,20 @@ def _ollama_payload_repair_hint(state_kind: str) -> str:
 
 
 def _parse_run_output(content: str) -> RunOutput:
+    stripped = content.strip()
+    # MiniMax's native OpenAI-compatible response format may prepend its
+    # reasoning in a <think> block. It is conversation history, not part of
+    # the structured RunOutput payload.
+    stripped = re.sub(
+        r"\A<think\b[^>]*>.*?</think>\s*",
+        "",
+        stripped,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     try:
-        return RunOutput.model_validate_json(content)
+        return RunOutput.model_validate_json(stripped)
     except ValidationError as original:
-        stripped = content.strip()
         try:
             value, end = json.JSONDecoder().raw_decode(stripped)
         except (json.JSONDecodeError, ValueError):

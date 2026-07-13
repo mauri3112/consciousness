@@ -141,7 +141,7 @@ STARTER_MODELS = [
         "base_url": "https://api.minimax.io/v1",
         "api_key_env": "MINIMAX_API_KEY",
         "billing_mode": "subscription",
-        "provider_options": {"thinking": {"type": "enabled"}},
+        "provider_options": {"reasoning_split": True},
         "context_window": 200_000,
         "relative_cost": 0.2,
         "max_run_budget": 0.0,

@@ -99,9 +99,10 @@ The API binds to loopback by default, restricts CORS to configured Studio origin
   Ornith is pinned to routine states; MiniMax M3 is pinned to Audit through a generic Chat Completions
   adapter and environment/vault credential references; the Studio supports model registration, secret
   submission, testing, and state assignment; Publish rejects proposals from before the latest Audit.
-  Backend tests, Ruff, frontend build, Ornith installation,
-  and an Ornith RunOutput structured smoke (92 input/35 output tokens) passed on 2026-07-13. MiniMax live structured smoke remains a run-two
-  preflight because no subscription key was exposed to this process.
+  Backend tests, Ruff, frontend build, Ornith installation, and both live structured-output
+  preflights passed on 2026-07-13: Ornith used 92 input/35 output tokens and MiniMax M3 used
+  272 input/104 output tokens. The MiniMax adapter now requests split reasoning and defensively
+  excludes native `<think>` prefixes from the RunOutput payload.
 - [-] **QA-001** — CI lint/type/test/build coverage plus migration, contract, recovery, API, and browser tests. Dependencies: all implementation milestones. Evidence: 77 backend tests, Ruff, frontend build, authenticated Compose contract/rebuild, normal-volume live Ollama cycle, live lifecycle acceptance, operator regression, and in-app desktop/mobile QA pass; configured OpenAI smoke remains.
 - [-] **REL-001** — Clean install and upgrade rehearsal, release checklist, limitations, and operator runbook. Dependencies: FLOW-003, QA-001, OPS-001, OPS-002. Evidence: fresh live SQLite install/cycle, populated Compose backup upgrade integrity rehearsal, rebuilt healthy services, and `docs/operator-runbook.md`; v1 tag remains gated on QA-001/OpenAI disposition.
 
@@ -152,6 +153,12 @@ docker compose config
 Full local acceptance additionally starts only-memories, `consciousness-api`, `consciousness-worker`, and the Studio, completes one six-state cycle, interrupts the worker once, and verifies the graph marker, event log, artifacts, approvals, and usage ledger.
 
 ## Changelog
+
+- 2026-07-13 — Closed the run-two cloud preflight with the operator-provided MiniMax subscription
+  key. A live M3 call exposed native `<think>` content ahead of the structured envelope; the generic
+  Chat Completions adapter now requests `reasoning_split`, parses native reasoning prefixes safely,
+  and records the option through an immutable procedure activation. Verified 83 backend tests, Ruff,
+  the frontend production build, and live Ornith plus MiniMax structured-output calls.
 
 - 2026-07-13 — Audited the first soak and prepared run two: isolated only-memories evidence from agent
   activity, removed automatic similarity edges, added provenance-aware retrieval and idempotent writes,

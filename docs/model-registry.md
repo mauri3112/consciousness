@@ -43,6 +43,8 @@ Operators must confirm model availability, context limits, capabilities, and pri
 Install the official GGUF with
 `ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M`. MiniMax uses the
 OpenAI-compatible Chat Completions protocol at `https://api.minimax.io/v1` and resolves
-`MINIMAX_API_KEY`; it does not reuse the OpenAI Responses adapter. UI-entered secrets are never
+`MINIMAX_API_KEY`; its profile enables `reasoning_split` so reasoning remains separate from the
+structured result, while the adapter also tolerates the provider's native `<think>` prefix. It does
+not reuse the OpenAI Responses adapter. UI-entered secrets are never
 returned by the API and require the encrypted vault master key. Hermes OAuth is not imported or
 silently reused; provider subscription OAuth remains an explicit future auth strategy.

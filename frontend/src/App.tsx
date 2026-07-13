@@ -381,7 +381,7 @@ function ModelsView({ snapshot }: { snapshot: ProcedureSnapshot }) {
         id, provider, model, protocol: provider === "ollama" ? "ollama_chat" : "openai_chat",
         base_url: baseUrl || null, api_key_env: keyEnv || null, credential_ref: null,
         billing_mode: provider === "ollama" ? "local" : provider === "minimax" ? "subscription" : "metered",
-        provider_options: provider === "minimax" ? { thinking: { type: "enabled" } } : {},
+        provider_options: provider === "minimax" ? { reasoning_split: true } : {},
         context_window: provider === "ollama" ? 32768 : 200000, relative_cost: provider === "ollama" ? 0 : 0.2,
         max_run_budget: 0, quality_tier: provider === "minimax" ? 5 : 3,
         strengths: provider === "minimax" ? ["procedure-design", "graph-supervision"] : ["reasoning"],

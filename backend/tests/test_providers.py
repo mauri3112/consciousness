@@ -339,6 +339,38 @@ def test_openai_chat_preserves_minimax_reasoning_message_in_tool_loop(
     assert calls[1]["messages"][3]["tool_call_id"] == "call-1"
 
 
+def test_openai_chat_parses_minimax_native_think_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def post(*_args: Any, **kwargs: Any) -> FakeHTTPResponse:
+        calls.append(kwargs["json"])
+        content = f"<think>private reasoning that is not JSON</think>\n{output().model_dump_json()}"
+        return FakeHTTPResponse(
+            {
+                "id": "chat-think",
+                "choices": [{"message": {"role": "assistant", "content": content}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+            }
+        )
+
+    monkeypatch.setattr(httpx, "post", post)
+    request = provider_request(
+        model=provider_request().model.model_copy(
+            update={"provider_options": {"reasoning_split": True}}
+        )
+    )
+
+    result = OpenAIChatProvider("https://api.minimax.io/v1", "secret", "minimax").execute(
+        request
+    )
+
+    assert result.output.summary == "done"
+    assert calls[0]["reasoning_split"] is True
+    assert len(calls) == 1
+
+
 def test_build_provider_resolves_any_provider_key_from_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CUSTOM_PROVIDER_KEY", "env-secret")
     model = provider_request().model.model_copy(
