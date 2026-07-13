@@ -5,6 +5,7 @@ from pathlib import Path
 from consciousness.artifacts import ArtifactStore
 from consciousness.guardrails import default_guardrails
 from consciousness.models import (
+    AuditDecision,
     MemoryChange,
     MemoryChangeProposal,
     RunOutput,
@@ -305,6 +306,46 @@ def test_publish_applies_only_validated_changes_maps_lifecycle_and_prevents_repl
     assert len(client.remembered) == 2
     assert len(client.reinforced) == 1
     assert len(client.forgotten) == 1
+
+
+def test_publish_does_not_reuse_a_proposal_from_before_the_latest_audit(tmp_path: Path) -> None:
+    store = ConsciousnessStore(tmp_path / "cycle-local-publish.db")
+    store.setup()
+    finish_evidence_run(
+        store,
+        "curate",
+        MemoryChangeProposal(
+            changes=[MemoryChange(action="remember", content="stale", reason="old cycle")]
+        ),
+    )
+    finish_evidence_run(
+        store,
+        "validate",
+        ValidationReport(
+            sufficient_evidence=True,
+            findings=[ValidationFinding(change_index=0, accepted=True, reason="old validation")],
+        ),
+    )
+    finish_evidence_run(store, "audit", AuditDecision(decision="continue"))
+    publish_state = next(
+        item for item in store.current_version().definition.states if item.id == "publish"
+    )
+    publish_run = store.begin_run(publish_state, store.list_models()[0])
+    registry = build_tool_registry(
+        store,
+        only_memories=None,
+        artifacts=ArtifactStore(tmp_path / "artifacts", store),
+    )
+
+    receipt = _publish_validated_changes(
+        store,
+        registry,
+        publish_run.id,
+        default_guardrails().capability_policies,
+    )
+
+    assert receipt.proposal_run_id is None
+    assert receipt.skipped_reason == "no cycle-local validated memory proposal is available"
 
 
 def test_gather_records_degraded_memory_search_and_unresolved_risk(tmp_path: Path, monkeypatch) -> None:

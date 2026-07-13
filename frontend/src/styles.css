@@ -255,6 +255,13 @@ button:disabled { cursor: wait; opacity: .48; }
 .permission-grid b { overflow: hidden; color: #d9ddd5; font-size: 8px; text-overflow: ellipsis; }
 .tag-list span.unavailable { color: var(--amber); border-color: #66552f; background: rgba(227,175,69,.06); }
 .access-editor { display: grid; gap: 10px; padding: 11px; border: 1px solid var(--line-bright); background: #101414; }
+.model-actions { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.model-actions p { margin: 0; color: var(--muted); font: 8px/1.4 var(--mono); }
+.model-form { display: grid; gap: 10px; margin: 12px; padding: 14px; border: 1px solid var(--line-bright); background: #101414; }
+.check-field { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 8px/1.4 var(--mono); }
+.check-field input { width: auto; }
+.data-table td small { display: block; margin-top: 4px; color: var(--dim); font: 7px/1.2 var(--mono); }
+.model-test-result { margin: 12px; }
 
 .empty-state { display: grid; place-items: center; align-content: center; gap: 8px; min-height: 220px; color: var(--dim); }
 .empty-state strong { font: 9px/1 var(--mono); text-transform: uppercase; }

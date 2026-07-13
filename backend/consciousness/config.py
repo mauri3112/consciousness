@@ -9,10 +9,13 @@ from pydantic import BaseModel, Field
 class Settings(BaseModel):
     database_path: Path = Path("./data/consciousness.db")
     artifact_root: Path = Path("./data/artifacts")
+    credential_store_path: Path = Path("./data/credentials.enc")
+    credential_encryption_key: str | None = None
     loop_interval_seconds: int = Field(default=60, ge=1)
     execution_mode: str = "preview"
     only_memories_url: str | None = "http://localhost:8765"
     only_memories_write_recaps: bool = False
+    only_memories_space_id: str = "default"
     openai_api_key: str | None = None
     ollama_url: str = "http://localhost:11434"
     api_host: str = "127.0.0.1"
@@ -50,10 +53,15 @@ def get_settings() -> Settings:
     return Settings(
         database_path=Path(os.getenv("CONSCIOUSNESS_DB", "./data/consciousness.db")),
         artifact_root=Path(os.getenv("CONSCIOUSNESS_ARTIFACT_ROOT", "./data/artifacts")),
+        credential_store_path=Path(
+            os.getenv("CONSCIOUSNESS_CREDENTIAL_STORE", "./data/credentials.enc")
+        ),
+        credential_encryption_key=os.getenv("CONSCIOUSNESS_CREDENTIAL_KEY") or None,
         loop_interval_seconds=int(os.getenv("CONSCIOUSNESS_LOOP_INTERVAL_SECONDS", "60")),
         execution_mode=os.getenv("CONSCIOUSNESS_EXECUTION_MODE", "preview"),
         only_memories_url=os.getenv("ONLY_MEMORIES_URL", "http://localhost:8765") or None,
         only_memories_write_recaps=_env_bool("ONLY_MEMORIES_WRITE_RECAPS", False),
+        only_memories_space_id=os.getenv("ONLY_MEMORIES_SPACE_ID", "default"),
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
         api_host=os.getenv("CONSCIOUSNESS_API_HOST", "127.0.0.1"),

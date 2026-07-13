@@ -13,7 +13,9 @@ from typing import Any
 
 
 CANONICAL_STATES = ["gather", "curate", "synthesize", "validate", "publish", "audit"]
-LOCAL_MODEL_ID = "local/qwen3.5-9b"
+LOCAL_MODEL_ID = "local/ornith-1.0-9b-q4"
+LOCAL_MODEL_NAME = "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M"
+AUDIT_MODEL_ID = "minimax/MiniMax-M3"
 
 
 class VerificationError(RuntimeError):
@@ -69,8 +71,11 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     model_health = request_json(args.api_url, f"/api/v1/models/{LOCAL_MODEL_ID}/test", method="POST")
     if model_health.get("status") not in {"ok", "healthy"}:
         raise VerificationError(f"{LOCAL_MODEL_ID} is not healthy: {model_health}")
-    if "models" in model_health and "qwen3.5:9b" not in model_health["models"]:
-        raise VerificationError(f"Ollama is reachable but qwen3.5:9b is not installed: {model_health}")
+    if "models" in model_health and LOCAL_MODEL_NAME not in model_health["models"]:
+        raise VerificationError(f"Ollama is reachable but Ornith is not installed: {model_health}")
+    audit_health = request_json(args.api_url, f"/api/v1/models/{AUDIT_MODEL_ID}/test", method="POST")
+    if audit_health.get("status") not in {"configured", "healthy"}:
+        raise VerificationError(f"{AUDIT_MODEL_ID} is not healthy: {audit_health}")
 
     submit_and_wait(args.api_url, "pause", args.command_timeout)
     runtime = request_json(args.api_url, "/api/v1/runtime")
@@ -99,8 +104,9 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             raise VerificationError(f"expected state {expected_state}, got {run['state_id']}")
         if run["status"] != "succeeded":
             raise VerificationError(f"run {run['id']} ended with {run['status']}: {run.get('error_message')}")
-        if run["model_id"] != LOCAL_MODEL_ID:
-            raise VerificationError(f"run {run['id']} used {run['model_id']} instead of {LOCAL_MODEL_ID}")
+        expected_model = AUDIT_MODEL_ID if expected_state == "audit" else LOCAL_MODEL_ID
+        if run["model_id"] != expected_model:
+            raise VerificationError(f"run {run['id']} used {run['model_id']} instead of {expected_model}")
         if not run.get("provider_request_id") or not run.get("output") or run.get("finished_at") is None:
             raise VerificationError(f"run {run['id']} is missing durable provider/output evidence")
         cycle_runs.append(run)

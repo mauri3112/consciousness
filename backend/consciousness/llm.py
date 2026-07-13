@@ -27,6 +27,15 @@ def choose_model(
     if not eligible:
         raise RuntimeError(f"no enabled model can satisfy {state.context_minimum} context tokens")
 
+    if state.preferred_model_id:
+        preferred = next((model for model in eligible if model.id == state.preferred_model_id), None)
+        if preferred:
+            return preferred
+        if not state.allow_model_fallback:
+            raise RuntimeError(
+                f"pinned model {state.preferred_model_id!r} cannot satisfy state {state.id!r}"
+            )
+
     policy = state.model_policy
     if policy == "auditor":
         auditor_models = [model for model in eligible if "procedure-design" in model.strengths or model.quality_tier >= 5]

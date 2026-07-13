@@ -15,25 +15,29 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .artifacts import ArtifactStore
 from .config import get_settings
+from .credentials import CredentialStore
 from .models import (
     AccessOverrides,
     ApprovalRecord,
     ArtifactRecord,
     CommandKind,
+    ContextManifest,
     IntegrationStatus,
     ModelProfile,
     ProcedureDefinition,
+    ProcedureState,
     ProcedureSnapshot,
     ProcedureVersion,
     RunEvent,
     RunRecord,
     RuntimeCommand,
     RuntimeState,
+    StateKind,
     ToolCallRecord,
 )
 from .only_memories import OnlyMemoriesClient
 from .operations import configure_structured_logging
-from .providers import ProviderError, build_provider
+from .providers import ProviderError, ProviderRequest, build_provider
 from .store import ConsciousnessStore, utcnow
 from .tools import build_tool_registry
 
@@ -143,6 +147,12 @@ class ApprovalDecision(BaseModel):
 class DraftModelUpdate(BaseModel):
     revision: int
     profile: ModelProfile
+
+
+class ModelRegistration(BaseModel):
+    profile: ModelProfile
+    api_key: str | None = Field(default=None, min_length=1)
+    assign_states: list[str] = Field(default_factory=list)
 
 
 class ToolCallReconciliation(BaseModel):
@@ -484,6 +494,82 @@ def models(store: ConsciousnessStore = Depends(get_store)):
     return store.list_models()
 
 
+@app.get("/api/v1/providers")
+def providers():
+    vault = CredentialStore(settings.credential_store_path, settings.credential_encryption_key)
+    return {
+        "presets": [
+            {
+                "id": "ollama",
+                "label": "Ollama",
+                "protocol": "ollama_chat",
+                "base_url": settings.ollama_url,
+                "auth": "none",
+            },
+            {
+                "id": "minimax",
+                "label": "MiniMax",
+                "protocol": "openai_chat",
+                "base_url": "https://api.minimax.io/v1",
+                "auth": "api_key_or_token_plan",
+                "api_key_env": "MINIMAX_API_KEY",
+            },
+            {
+                "id": "openai-compatible",
+                "label": "OpenAI-compatible",
+                "protocol": "openai_chat",
+                "auth": "api_key",
+            },
+        ],
+        "write_only_vault_available": vault.writable,
+        "subscription_oauth": {
+            "status": "not_supported",
+            "reason": "Provider-specific OAuth must be explicitly authorized; Hermes credentials are not imported.",
+        },
+    }
+
+
+@app.post("/api/v1/models", response_model=ProcedureVersion)
+def register_model(
+    payload: ModelRegistration,
+    store: ConsciousnessStore = Depends(get_store),
+) -> ProcedureVersion:
+    active = store.current_version()
+    definition = active.definition.model_copy(deep=True)
+    if any(model.id == payload.profile.id for model in definition.models):
+        raise HTTPException(status_code=409, detail={"code": "model_exists"})
+    profile = payload.profile.model_copy(deep=True)
+    if payload.api_key:
+        reference = f"vault:{profile.id}"
+        try:
+            CredentialStore(
+                settings.credential_store_path, settings.credential_encryption_key
+            ).put(reference, payload.api_key)
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "credential_store_unavailable", "message": str(exc)},
+            ) from exc
+        profile.credential_ref = reference
+    definition.models.append(profile)
+    for state in definition.states:
+        if state.id in payload.assign_states:
+            state.preferred_model_id = profile.id
+            state.allow_model_fallback = False
+    draft = store.create_draft(active.id)
+    updated = store.update_draft(draft.id, definition, expected_revision=draft.revision)
+    errors = store.validate_version(updated.id)
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_model_registration", "errors": errors},
+        )
+    return store.activate_version(
+        updated.id,
+        rationale=f"register model {profile.id} and assign explicit state selectors",
+    )
+
+
 @app.put("/api/v1/procedure/drafts/{version_id}/models/{model_id}", response_model=ProcedureVersion)
 def update_draft_model(
     version_id: str,
@@ -506,7 +592,11 @@ def update_draft_model(
 
 
 @app.post("/api/v1/models/{model_id:path}/test")
-def test_model(model_id: str, store: ConsciousnessStore = Depends(get_store)):
+def test_model(
+    model_id: str,
+    execute: bool = False,
+    store: ConsciousnessStore = Depends(get_store),
+):
     try:
         model = next(item for item in store.list_models() if item.id == model_id)
         provider = build_provider(
@@ -514,8 +604,52 @@ def test_model(model_id: str, store: ConsciousnessStore = Depends(get_store)):
             execution_mode="live",
             openai_api_key=settings.openai_api_key,
             ollama_url=settings.ollama_url,
+            credential_resolver=CredentialStore(
+                settings.credential_store_path, settings.credential_encryption_key
+            ).get,
         )
-        return provider.health()
+        health = provider.health()
+        if not execute or health.get("status") not in {"healthy", "configured", "ok"}:
+            return health
+        is_audit = model_id == "minimax/MiniMax-M3" or "graph-supervision" in model.strengths
+        state = ProcedureState(
+            id="audit" if is_audit else "gather",
+            name="Capability smoke",
+            kind=StateKind.audit if is_audit else StateKind.gather,
+            domain="model verification",
+            goal_template="Return one valid structured capability-smoke result.",
+            prompt_contract="Return JSON only and do not call tools.",
+            output_contract="A valid RunOutput envelope.",
+            context_minimum=min(model.context_window, 32_768),
+        )
+        payload = (
+            '{"kind":"audit_decision","decision":"continue","model_recommendation":null,'
+            '"mutation_summary":null,"mutation_patch":[]}'
+            if is_audit
+            else '{"kind":"context_bundle","query":"capability smoke","items":[],"omitted_items":0}'
+        )
+        result = provider.execute(
+            ProviderRequest(
+                state=state,
+                model=model,
+                context=ContextManifest(),
+                previous_output=None,
+                instructions="Return one valid RunOutput JSON object exactly as requested.",
+                input_text=(
+                    "Return exactly this JSON object with no markdown: "
+                    '{"summary":"capability smoke passed","confidence":1.0,'
+                    '"changed_resources":[],"source_links":[],"unresolved_risks":[],'
+                    f'"next_transition_recommendation":"gather","payload":{payload}}}'
+                ),
+            )
+        )
+        return {
+            **health,
+            "structured_output": "passed",
+            "summary": result.output.summary,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+        }
     except StopIteration as exc:
         raise HTTPException(status_code=404, detail={"code": "not_found", "resource": "model"}) from exc
     except ProviderError as exc:

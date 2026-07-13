@@ -75,12 +75,19 @@ class Api:
 
 class MemoryExperiment:
     def __init__(self) -> None:
-        self.experiment_id = os.getenv("EXPERIMENT_ID", "memory-stewardship-v1")
+        self.experiment_id = os.getenv("EXPERIMENT_ID", "memory-stewardship-v2")
         self.output_root = Path(os.getenv("EXPERIMENT_OUTPUT_ROOT", "./data/experiments")) / self.experiment_id
         self.fixture_path = Path(os.getenv("EXPERIMENT_FIXTURE_PATH", "./experiments/memory-stewardship-v1/fixtures.json"))
         self.consciousness_db = Path(os.getenv("EXPERIMENT_CONSCIOUSNESS_DB", "./data/consciousness.db"))
         self.only_memories_db = Path(os.getenv("EXPERIMENT_ONLY_MEMORIES_DB", "../only-memories/backend/data/only-memories.sqlite3"))
-        self.required_model = os.getenv("EXPERIMENT_REQUIRED_MODEL", "qwen3.5:9b")
+        self.required_model = os.getenv(
+            "EXPERIMENT_REQUIRED_LOCAL_MODEL",
+            "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M",
+        )
+        self.audit_model_id = os.getenv("EXPERIMENT_AUDIT_MODEL_ID", "minimax/MiniMax-M3")
+        self.memory_space_id = os.getenv(
+            "EXPERIMENT_MEMORY_SPACE_ID", f"experiment:{self.experiment_id}"
+        )
         self.agent_interval = int(os.getenv("EXPERIMENT_AGENT_INTERVAL_SECONDS", "300"))
         self.duration_seconds = int(os.getenv("EXPERIMENT_DURATION_SECONDS", "28800"))
         self.backup_interval = int(os.getenv("EXPERIMENT_BACKUP_INTERVAL_SECONDS", "1800"))
@@ -129,6 +136,7 @@ class MemoryExperiment:
         installed = {item["name"] for item in tags.get("models", [])}
         running = [item["name"] for item in resident.get("models", [])]
         states = procedure.get("version", {}).get("definition", {}).get("states", [])
+        state_assignments = {item["id"]: item.get("preferred_model_id") for item in states}
         configured_local = {
             item["model"]
             for item in self.consciousness.get("/api/v1/models")
@@ -149,6 +157,19 @@ class MemoryExperiment:
             problems.append(f"enabled local profiles must select only {self.required_model}: {sorted(configured_local)}")
         if len(running) > 1 or any(name != self.required_model for name in running):
             problems.append(f"Ollama must have at most one resident model and it must be {self.required_model}: {running}")
+        for state_id, model_id in state_assignments.items():
+            expected = self.audit_model_id if state_id == "audit" else "local/ornith-1.0-9b-q4"
+            if model_id != expected:
+                problems.append(f"state {state_id} must pin {expected}, got {model_id}")
+        try:
+            audit_health = self.consciousness.post(
+                f"/api/v1/models/{self.audit_model_id}/test?execute=true"
+            )
+            if audit_health.get("status") not in {"healthy", "configured"}:
+                problems.append(f"audit provider is not healthy: {audit_health}")
+        except Exception as exc:
+            audit_health = {"status": "unavailable", "error": str(exc)}
+            problems.append(f"audit provider preflight failed: {exc}")
         if problems:
             raise RuntimeError("; ".join(problems))
         return {
@@ -159,6 +180,10 @@ class MemoryExperiment:
             "resident_models": running,
             "configured_local_models": sorted(configured_local),
             "agent_states": [{"id": item["id"], "name": item["name"], "kind": item["kind"]} for item in states],
+            "state_model_assignments": state_assignments,
+            "audit_model_id": self.audit_model_id,
+            "audit_provider_health": audit_health,
+            "memory_space_id": self.memory_space_id,
         }
 
     def initialize(self) -> None:
@@ -182,7 +207,9 @@ class MemoryExperiment:
                         "agent_interval_seconds": self.agent_interval,
                         "backup_interval_seconds": self.backup_interval,
                         "snapshot_interval_seconds": self.snapshot_interval,
-                        "required_model": self.required_model,
+                        "required_local_model": self.required_model,
+                        "audit_model_id": self.audit_model_id,
+                        "memory_space_id": self.memory_space_id,
                     },
                     "environment": environment,
                     "fixture_sha256": sha256(self.output_root / "fixtures.json"),
@@ -217,6 +244,12 @@ class MemoryExperiment:
         metadata.update({"experiment_id": self.experiment_id, "fixture_key": key, "injection_phase": phase_id})
         payload["metadata"] = metadata
         payload.setdefault("source", f"consciousness-experiment:{self.experiment_id}")
+        payload.setdefault("space_id", self.memory_space_id)
+        payload.setdefault("plane", "knowledge")
+        payload.setdefault("provenance_class", "primary_source")
+        payload.setdefault("verification_status", "verified")
+        payload.setdefault("producer", "consciousness-experiment")
+        payload.setdefault("external_key", f"{self.experiment_id}:{key}")
         payload.setdefault("source_links", []).append(
             {"label": f"Experiment fixture {key}", "kind": "fixture", "uri": f"experiment://{self.experiment_id}/{key}"}
         )
@@ -264,7 +297,18 @@ class MemoryExperiment:
         environment = self.validate_environment()
         searches = {}
         for probe in self.fixtures["search_probes"]:
-            searches[probe] = self.memories.post("/search", {"query": probe, "limit": 10, "scope": "remembering"})
+            searches[probe] = self.memories.post(
+                "/search",
+                {
+                    "query": probe,
+                    "limit": 10,
+                    "scope": "remembering",
+                    "intent": "evidence",
+                    "space_ids": [self.memory_space_id],
+                    "planes": ["knowledge"],
+                    "include_generated": False,
+                },
+            )
         memories = self.memories.get(
             "/memories", limit=200, include_versions="true", include_forgotten="true", include_expired="true"
         )
@@ -349,7 +393,13 @@ class MemoryExperiment:
                     self.backup("after-" + "-".join(injected) if injected else "periodic")
                     last_backup = time.monotonic()
                 self.update_status()
-            self.consciousness.post("/api/v1/control/pause")
+            command = self.consciousness.post("/api/v1/control/pause")
+            deadline = time.monotonic() + 60
+            while command.get("status") not in {"completed", "failed"} and time.monotonic() < deadline:
+                time.sleep(1)
+                command = self.consciousness.get(f"/api/v1/commands/{command['id']}")
+            if command.get("status") != "completed":
+                raise RuntimeError(f"final pause did not complete: {command}")
             self.state["status"] = "completed"
             self.state["completed_at"] = iso_now()
             self._save_state()
@@ -373,7 +423,7 @@ class MemoryExperiment:
 
 def health(output_root: Path | None = None, experiment_id: str | None = None) -> None:
     root = output_root or Path(os.getenv("EXPERIMENT_OUTPUT_ROOT", "./data/experiments"))
-    path = root / (experiment_id or os.getenv("EXPERIMENT_ID", "memory-stewardship-v1")) / "status.json"
+    path = root / (experiment_id or os.getenv("EXPERIMENT_ID", "memory-stewardship-v2")) / "status.json"
     if not path.exists():
         raise SystemExit("experiment status does not exist")
     status = json.loads(path.read_text())

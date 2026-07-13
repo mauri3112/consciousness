@@ -10,10 +10,12 @@ from crowding out durable knowledge.
 - Six agent roles run in graph order: Gather, Curate, Synthesize, Validate, Publish, and Audit.
 - A single worker executes one role at a time. This keeps SQLite state deterministic and prevents local
   model concurrency.
-- Every role uses the already-installed `qwen3.5:9b`. The runner checks Ollama before every snapshot
-  and fails safely if a second/different model becomes resident.
+- Gather through Publish use installed Ornith 1.0 9B Q4. Audit uses the pinned MiniMax M3 supervisor.
+  Preflight checks the exact assignments, Ollama residency, and MiniMax provider health.
+- Fixture evidence is isolated in `experiment:<EXPERIMENT_ID>` on the `knowledge` plane. Generated
+  run recaps are excluded from normal retrieval and, when enabled, belong to `activity`.
 - The default run lasts eight hours. The worker advances every five minutes, so each role should run
-  roughly eight times if the machine remains healthy.
+  roughly sixteen times if the machine remains healthy.
 - The supervisor sets the five-minute interval through the durable runtime API and records the change
   as a `runtime.interval` event; existing databases therefore cannot silently retain a faster cadence.
 - Nine fixture phases arrive from minute 0 through minute 360. They cover durable axioms, an active
@@ -34,8 +36,11 @@ Confirm the sibling stack and model, then start the experiment profile:
 
 ```bash
 docker compose -f ../only-memories/docker-compose.yml up --build -d
-ollama list
+ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M
 cp .env.experiment.example .env.experiment
+# Set MINIMAX_API_KEY in .env.experiment, then activate the run-two profile once.
+docker compose --env-file .env.experiment up --build -d
+docker compose --env-file .env.experiment exec api consciousness-upgrade-second-run-profile --apply
 docker compose --env-file .env.experiment --profile experiment up --build -d
 ```
 
@@ -78,7 +83,7 @@ curl -fsS http://localhost:11434/api/ps
 - only-memories UI: `http://localhost:5173`
 - Experiment status: `data/experiments/<EXPERIMENT_ID>/status.json`
 
-Normal observations are one resident `qwen3.5:9b`, a running Consciousness runtime, a fresh experiment
+Normal observations are one resident Ornith model, MiniMax assigned only to Audit, a running Consciousness runtime, a fresh experiment
 heartbeat, steadily increasing successful runs distributed across all six states, and new snapshot and
 backup sequence numbers. A `failed` experiment status, stale heartbeat, multiple resident models,
 repeated failed runs, a degraded integration, or an integrity error requires investigation. The runner
@@ -112,8 +117,8 @@ recreate fixture memories already recorded in `state.json`.
 Start with `manifest.json`, `status.json`, and the final snapshot. Then compare early, middle, and final
 snapshots plus their adjacent database backups.
 
-1. Confirm every completed run used `local/qwen3.5-9b` and no snapshot recorded multiple resident
-   Ollama models.
+1. Confirm routine runs used `local/ornith-1.0-9b-q4`, Audit used `minimax/MiniMax-M3`, and no
+   snapshot recorded multiple resident Ollama models.
 2. Confirm each of the six agent states ran several times, and inspect failures, unresolved risks,
    changed resources, source links, tool calls, and pending approvals.
 3. Compare the five fixed search probes. The provenance axiom, current Monday deadline, live reminder,

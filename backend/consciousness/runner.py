@@ -10,6 +10,7 @@ from typing import Any
 
 from .artifacts import ArtifactStore
 from .config import Settings, get_settings
+from .credentials import CredentialStore
 from .context import assemble_prompt, build_context_manifest
 from .llm import choose_model
 from .models import (
@@ -127,7 +128,10 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
         state = store.current_state()
         access = resolve_state_access(definition, state)
         state = apply_resolved_access(state, access)
-        local_only = runtime.status == RuntimeStatus.degraded or store.daily_spend() >= runtime.daily_budget_cap
+        local_only = (
+            runtime.status == RuntimeStatus.degraded
+            or store.daily_spend() >= runtime.daily_budget_cap
+        ) and state.kind != "audit"
         model = choose_model(
             state,
             store.list_models(),
@@ -135,10 +139,15 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
             daily_budget_cap=runtime.daily_budget_cap,
             local_only=local_only,
         )
-        previous_runs = [run for run in store.list_runs(limit=20) if run.status == RunStatus.succeeded]
-        previous = previous_runs[0] if previous_runs else None
+        previous_runs = store.list_runs(limit=50)
+        previous = next((run for run in previous_runs if run.status == RunStatus.succeeded), None)
         try:
-            manifest = build_context_manifest(state, only_memories=only_memories, previous_runs=previous_runs)
+            manifest = build_context_manifest(
+                state,
+                only_memories=only_memories,
+                previous_runs=previous_runs,
+                memory_space_id=settings.only_memories_space_id,
+            )
         except Exception as exc:
             if state.kind != "gather" or only_memories is None:
                 raise
@@ -153,7 +162,12 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
                 )
             )
             store.add_event("integration.degraded", {"name": "only-memories", "operation": "search", "error": str(exc)})
-            manifest = build_context_manifest(state, only_memories=None, previous_runs=previous_runs)
+            manifest = build_context_manifest(
+                state,
+                only_memories=None,
+                previous_runs=previous_runs,
+                memory_space_id=settings.only_memories_space_id,
+            )
             manifest.unresolved_risks.append(risk)
         instructions, input_text = assemble_prompt(state, manifest, previous)
         run = store.begin_run(state, model, manifest=manifest, agent_access=access)
@@ -169,6 +183,9 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
             execution_mode=settings.execution_mode,
             openai_api_key=settings.openai_api_key,
             ollama_url=settings.ollama_url,
+            credential_resolver=CredentialStore(
+                settings.credential_store_path, settings.credential_encryption_key
+            ).get,
         )
         artifacts = ArtifactStore(settings.artifact_root, store)
         registry = build_tool_registry(store, only_memories=only_memories, artifacts=artifacts)
@@ -260,7 +277,7 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
             cost=cost,
         )
         heartbeat.assert_owned()
-        recap = _add_recap(store, state.id, finished.id, model.id, result.output.summary)
+        recap = _add_recap(store, state.id, finished.id, model.id, result.output)
         transition = store.next_transition(state.id, result.output)
         next_state = store.set_current_state(transition.target_id)
         store.add_event(
@@ -269,7 +286,14 @@ def run_once(database_path: Path | None = None, *, worker_id: str | None = None,
             run_id=run.id,
         )
         if settings.only_memories_write_recaps and only_memories:
-            _write_recap_to_only_memories(only_memories, finished, state.name, store, settings.only_memories_url)
+            _write_recap_to_only_memories(
+                only_memories,
+                finished,
+                state.name,
+                store,
+                settings.only_memories_url,
+                settings.only_memories_space_id,
+            )
         store.record_execution_success()
         logger.info(
             "run complete",
@@ -362,29 +386,60 @@ def _apply_command(store: ConsciousnessStore, kind: CommandKind) -> None:
 
 
 def _publish_validated_changes(store: ConsciousnessStore, registry: ToolRegistry, run_id: str, policies) -> PublishReceipt:
-    proposals = [
-        candidate
-        for candidate in store.list_runs(limit=30, state_id="curate", status=RunStatus.succeeded.value)
-        if candidate.output and isinstance(candidate.output.payload, MemoryChangeProposal)
-    ]
-    validations = [
-        candidate
-        for candidate in store.list_runs(limit=30, state_id="validate", status=RunStatus.succeeded.value)
-        if candidate.output and isinstance(candidate.output.payload, ValidationReport)
-    ]
-    proposal = next(
+    recent_runs = store.list_runs(limit=200)
+    latest_audit = next(
         (
             candidate
-            for candidate in proposals
-            if any(validation.started_at > candidate.started_at for validation in validations)
+            for candidate in recent_runs
+            if candidate.state_id == "audit" and candidate.status == RunStatus.succeeded
         ),
         None,
     )
+    cycle_runs = [
+        candidate
+        for candidate in recent_runs
+        if latest_audit is None or candidate.started_at > latest_audit.started_at
+    ]
+    proposals = [
+        candidate
+        for candidate in cycle_runs
+        if candidate.state_id == "curate"
+        and candidate.status == RunStatus.succeeded
+        and candidate.output
+        and isinstance(candidate.output.payload, MemoryChangeProposal)
+    ]
+    validations = [
+        candidate
+        for candidate in cycle_runs
+        if candidate.state_id == "validate"
+        and candidate.status == RunStatus.succeeded
+        and candidate.output
+        and isinstance(candidate.output.payload, ValidationReport)
+    ]
+    proposal = None
+    validation = None
+    for candidate_validation in validations:
+        linked_run_ids = {
+            item.origin_run_id
+            for item in candidate_validation.context_manifest.items
+            if item.origin_run_id
+        }
+        candidate_proposal = next(
+            (
+                candidate
+                for candidate in proposals
+                if candidate.started_at < candidate_validation.started_at
+                and (not linked_run_ids or candidate.id in linked_run_ids)
+            ),
+            None,
+        )
+        if candidate_proposal:
+            proposal = candidate_proposal
+            validation = candidate_validation
+            break
     if proposal is None:
-        return PublishReceipt(skipped_reason="no validated memory proposal is available")
-    validation = next(
-        candidate for candidate in validations if candidate.started_at > proposal.started_at
-    )
+        return PublishReceipt(skipped_reason="no cycle-local validated memory proposal is available")
+    assert validation is not None
     prior_receipts = [
         candidate.output.payload
         for candidate in store.list_runs(limit=50, state_id="publish", status=RunStatus.succeeded.value)
@@ -518,13 +573,14 @@ def _calculate_cost(input_rate: float, output_rate: float, input_tokens: int, ou
     return round((input_tokens / 1_000_000) * input_rate + (output_tokens / 1_000_000) * output_rate, 8)
 
 
-def _add_recap(store: ConsciousnessStore, state_id: str, run_id: str, model_id: str, summary: str) -> AuditorRecap:
+def _add_recap(store: ConsciousnessStore, state_id: str, run_id: str, model_id: str, output) -> AuditorRecap:
+    audit = output.payload if isinstance(output.payload, AuditDecision) else None
     return store.add_recap(
         run_id=run_id,
         auditor_model_id=model_id if state_id == "audit" else "loop-recorder",
-        summary=summary,
-        decision="continue" if state_id != "audit" else "continue_without_mutation",
-        procedure_changes=[],
+        summary=output.summary,
+        decision=audit.decision if audit else "continue",
+        procedure_changes=audit.mutation_patch if audit else [],
     )
 
 
@@ -540,9 +596,16 @@ def _check_only_memories(store: ConsciousnessStore, client: OnlyMemoriesClient |
     store.upsert_integration(status)
 
 
-def _write_recap_to_only_memories(client: OnlyMemoriesClient, run, state_name: str, store: ConsciousnessStore, base_url: str | None) -> None:
+def _write_recap_to_only_memories(
+    client: OnlyMemoriesClient,
+    run,
+    state_name: str,
+    store: ConsciousnessStore,
+    base_url: str | None,
+    space_id: str,
+) -> None:
     try:
-        memory = client.remember_run_recap(run, state_name)
+        memory = client.remember_run_recap(run, state_name, space_id=space_id)
         store.upsert_integration(IntegrationStatus(name="only-memories", status="wrote_recap", endpoint=base_url, last_checked_at=utcnow(), details={"memory_id": memory.get("id")}))
     except Exception as exc:
         store.upsert_integration(IntegrationStatus(name="only-memories", status="write_failed", endpoint=base_url, last_checked_at=utcnow(), details={"error": str(exc)}))

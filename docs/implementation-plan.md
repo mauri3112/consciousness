@@ -92,7 +92,16 @@ The API binds to loopback by default, restricts CORS to configured Studio origin
 
 - [x] **OPS-001** — API/worker/Studio Compose topology, health checks, persistent artifacts, safe shutdown, backup/restore, and upgrade docs. Dependencies: CORE-003, API-001. Evidence: three healthy services, persistent seven-run volume, worker restart with no state/run change, and one successful post-restart step.
 - [x] **OPS-002** — Structured logs, diagnostics, metrics, retention/VACUUM, and secret redaction. Dependencies: CORE-004. Evidence: JSON-log/redaction tests, metrics scrape, and populated-database diagnostics/backup/VACUUM rehearsal.
-- [x] **EXP-001** — Restartable eight-hour memory-stewardship soak harness with timed fixtures, durable phase cursor, fixed retrieval probes, single-resident-model enforcement, runtime cadence control, paired database backups, ranking/run snapshots, health status, and assessment guide. Dependencies: FLOW-003, OPS-001, OPS-002. Evidence: experiment `memory-stewardship-20260712` launched live on 2026-07-12 with six agent states and only installed/configured/resident `qwen3.5:9b`; core phase injected five memories; four paired backups passed SHA-256 and SQLite integrity verification; three snapshots, healthy supervisor heartbeat, five successful live agent runs, and rendered Studio/only-memories retrieval QA recorded. The soak remains intentionally in progress for eight hours and will pause itself at completion.
+- [x] **EXP-001** — Restartable eight-hour memory-stewardship soak harness with timed fixtures, durable phase cursor, fixed retrieval probes, single-resident-model enforcement, runtime cadence control, paired database backups, ranking/run snapshots, health status, and assessment guide. Dependencies: FLOW-003, OPS-001, OPS-002. Evidence: experiment `memory-stewardship-20260712` completed with 88 runs (80 succeeded, 8 invalid-output failures), 36 snapshots, 21 paired integrity-checked backups, and a final paused runtime. The infrastructure remained durable, but the behavioral audit found a self-feedback loop: successful run summaries and generated lifecycle recaps crowded out the Northstar corpus, while Audit received no failure evidence. Those findings are the basis of EXP-002.
+- [x] **EXP-002** — Prepare an isolated second-run profile after auditing the first soak. Evidence:
+  provenance-aware memory spaces/planes and idempotency landed in only-memories; Gather excludes
+  generated recaps; state context uses cycle-local typed handoffs; Audit receives failures and telemetry;
+  Ornith is pinned to routine states; MiniMax M3 is pinned to Audit through a generic Chat Completions
+  adapter and environment/vault credential references; the Studio supports model registration, secret
+  submission, testing, and state assignment; Publish rejects proposals from before the latest Audit.
+  Backend tests, Ruff, frontend build, Ornith installation,
+  and an Ornith RunOutput structured smoke (92 input/35 output tokens) passed on 2026-07-13. MiniMax live structured smoke remains a run-two
+  preflight because no subscription key was exposed to this process.
 - [-] **QA-001** — CI lint/type/test/build coverage plus migration, contract, recovery, API, and browser tests. Dependencies: all implementation milestones. Evidence: 77 backend tests, Ruff, frontend build, authenticated Compose contract/rebuild, normal-volume live Ollama cycle, live lifecycle acceptance, operator regression, and in-app desktop/mobile QA pass; configured OpenAI smoke remains.
 - [-] **REL-001** — Clean install and upgrade rehearsal, release checklist, limitations, and operator runbook. Dependencies: FLOW-003, QA-001, OPS-001, OPS-002. Evidence: fresh live SQLite install/cycle, populated Compose backup upgrade integrity rehearsal, rebuilt healthy services, and `docs/operator-runbook.md`; v1 tag remains gated on QA-001/OpenAI disposition.
 
@@ -143,6 +152,14 @@ docker compose config
 Full local acceptance additionally starts only-memories, `consciousness-api`, `consciousness-worker`, and the Studio, completes one six-state cycle, interrupts the worker once, and verifies the graph marker, event log, artifacts, approvals, and usage ledger.
 
 ## Changelog
+
+- 2026-07-13 — Audited the first soak and prepared run two: isolated only-memories evidence from agent
+  activity, removed automatic similarity edges, added provenance-aware retrieval and idempotent writes,
+  replaced global success-summary feedback with typed cycle handoffs and Audit telemetry, installed and
+  smoke-tested Ornith 1.0 9B Q4, added a generic OpenAI-compatible Chat adapter and encrypted write-only
+  key vault, pinned MiniMax M3 to Audit, added the Studio model/provider workflow, and parameterized the
+  experiment preflight/final pause. Verified 19 only-memories tests and 82 Consciousness tests plus
+  Ruff and the production frontend build.
 
 - 2026-07-12 — Launched the durable `memory-stewardship-20260712` experiment: six sequential agent roles use only installed `qwen3.5:9b` on a 300-second cadence while nine timed fixture phases test importance, reminders, repetition, correction, contradiction, expiry, and graph navigation. Added restart-safe supervision, single-resident-model checks, fixed retrieval probes, paired online SQLite backups with hashes, full snapshots/status/timeline, and a two-day assessment guide. Verified 77 backend tests, Ruff, Compose, isolated operator regression at `5174`, both rendered monitoring consoles, five successful live Qwen runs, four paired backup sets, and three snapshots.
 

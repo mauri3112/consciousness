@@ -17,6 +17,12 @@ Each state must define:
 - `skills`: legacy/custom behavior packs when no preset is selected.
 - `context_minimum`: minimum model context window.
 - `model_policy`: model selection policy.
+- `preferred_model_id`: optional exact model assignment.
+- `allow_model_fallback`: whether policy selection may replace an unavailable preferred model.
+
+Run two pins Gather through Publish to Ornith and Audit to MiniMax M3 with fallback disabled. The
+routine states use compact, typed predecessor handoffs so their honest 32K local context limit is
+sufficient; Audit receives cycle telemetry including failures instead of the global success-only feed.
 
 ## Run Output
 

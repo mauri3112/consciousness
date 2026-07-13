@@ -6,7 +6,8 @@ This runbook covers clean installation, upgrades, recovery, live-provider accept
 
 - Docker Desktop with Compose.
 - Ollama listening on `http://localhost:11434` for local live execution.
-- `qwen3.5:9b` installed with `ollama pull qwen3.5:9b` for the bundled local model profile.
+- Ornith installed with `ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M`.
+- `MINIMAX_API_KEY` configured for the MiniMax M3 Token Plan/API endpoint before run two.
 - The optional only-memories service on `http://localhost:8765` for the live memory vertical.
 - An `OPENAI_API_KEY` plus operator-confirmed OpenAI model rows when exercising the OpenAI adapter.
 
@@ -60,11 +61,11 @@ docker compose ps
 curl -fsS http://localhost:8770/api/v1/runtime
 ```
 
-For a persistent volume created before the bundled memory-safety, agent access presets, and `qwen3.5:9b` profile, apply the
+For a persistent volume created before the run-two profile, apply the
 upgrade as a new immutable procedure version with a mutation record and recap:
 
 ```bash
-docker compose exec api consciousness-upgrade-bundled-profile --apply
+docker compose exec api consciousness-upgrade-second-run-profile --apply
 ```
 
 The command is idempotent and preserves the current graph marker.
@@ -95,7 +96,7 @@ only-memories has no hard-delete contract, the restored fixtures remain tagged w
 The verifier first checks database readiness, only-memories health, the configured Ollama model, and
 the worker lease. It pauses continuous execution, captures the volume's current state, queues six
 steps one at a time, and polls each durable command. It then verifies that all six canonical states
-ran exactly once in rotated order, every run succeeded with `local/qwen3.5-9b`, the marker returned to
+ran exactly once in rotated order, each state used its explicit pinned model, the marker returned to
 its starting state, and the cycle recorded only-memories tool and artifact evidence. A slow machine can
 use `--command-timeout 1800`; the default is 900 seconds per command.
 
@@ -118,7 +119,7 @@ Every subsequent run records `agent_access` with the resolved preset id, permiss
 ## Memory Stewardship Soak Experiment
 
 The bundled experiment runs Gather, Curate, Synthesize, Validate, Publish, and Audit as six sequential
-agent roles using only `qwen3.5:9b`. It injects a controlled corpus over eight hours and captures both
+agent roles using Ornith for routine work and MiniMax M3 for Audit. It injects a controlled corpus over eight hours and captures both
 databases, retrieval rankings, run evidence, Ollama residency, approvals, and integration health.
 
 ```bash
@@ -129,7 +130,7 @@ docker compose --env-file .env.experiment logs -f experiment
 ```
 
 The experiment runner refuses to start unless live mode is active, the required model is installed,
-the graph has multiple states, the only enabled local profile is the required model, and Ollama has at
+the graph has multiple states, exact model assignments are present, MiniMax is healthy, the only enabled local profile is the required model, and Ollama has at
 most that one model resident. It resumes from its durable state after a failure. Full operating and
 assessment instructions are in [`memory-stewardship-experiment.md`](memory-stewardship-experiment.md).
 

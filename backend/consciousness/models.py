@@ -119,6 +119,8 @@ class ProcedureState(BaseModel):
     context_minimum: int = Field(default=32_768, ge=1)
     output_reserve: int = Field(default=4_096, ge=256)
     model_policy: str = "cheap-capable"
+    preferred_model_id: str | None = None
+    allow_model_fallback: bool = True
     max_attempts: int = Field(default=2, ge=1, le=10)
     max_run_budget: float | None = Field(default=None, ge=0)
     x: float = Field(default=50, ge=0, le=100)
@@ -140,6 +142,12 @@ class ModelProfile(BaseModel):
     id: str
     provider: str
     model: str
+    protocol: Literal["ollama_chat", "openai_responses", "openai_chat"] | None = None
+    base_url: str | None = None
+    api_key_env: str | None = None
+    credential_ref: str | None = None
+    billing_mode: Literal["local", "metered", "subscription"] = "metered"
+    provider_options: dict[str, Any] = Field(default_factory=dict)
     context_window: int = Field(ge=1)
     relative_cost: float = Field(ge=0)
     max_run_budget: float = Field(ge=0)
@@ -228,6 +236,9 @@ class ContextItem(BaseModel):
     content_hash: str | None = None
     token_estimate: int = 0
     score: float = 0
+    source_class: Literal["knowledge", "activity", "run_handoff", "audit_telemetry"] = "knowledge"
+    evidence_role: str | None = None
+    origin_run_id: str | None = None
 
 
 class ContextBundle(BaseModel):

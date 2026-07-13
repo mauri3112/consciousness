@@ -7,6 +7,21 @@ from collections.abc import Callable
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
 
+def _execute_script(conn: sqlite3.Connection, script: str) -> None:
+    """Execute DDL without sqlite3.executescript's implicit transaction commit."""
+    statement = ""
+    for line in script.splitlines():
+        statement += line + "\n"
+        if not sqlite3.complete_statement(statement):
+            continue
+        sql = statement.strip()
+        if sql:
+            conn.execute(sql)
+        statement = ""
+    if statement.strip():
+        raise RuntimeError("migration script ended with an incomplete SQL statement")
+
+
 BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS procedure_states (
   id TEXT PRIMARY KEY,
@@ -228,11 +243,11 @@ RUN_COLUMNS: dict[str, str] = {
 
 
 def _migration_1(conn: sqlite3.Connection) -> None:
-    conn.executescript(BASE_SCHEMA)
+    _execute_script(conn, BASE_SCHEMA)
 
 
 def _migration_2(conn: sqlite3.Connection) -> None:
-    conn.executescript(V1_SCHEMA)
+    _execute_script(conn, V1_SCHEMA)
     existing = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
     for name, declaration in RUN_COLUMNS.items():
         if name not in existing:

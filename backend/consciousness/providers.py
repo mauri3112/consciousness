@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from threading import Event
@@ -258,6 +259,130 @@ class OpenAIResponsesProvider(ModelProvider):
             return False
 
 
+class OpenAIChatProvider(ModelProvider):
+    """OpenAI-compatible Chat Completions adapter for MiniMax and similar providers."""
+
+    name = "openai_chat"
+
+    def __init__(self, base_url: str, api_key: str, provider_name: str, timeout: float = 180) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.provider_name = provider_name
+        self.timeout = timeout
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+
+    def health(self) -> dict[str, Any]:
+        try:
+            response = httpx.get(f"{self.base_url}/models", headers=self.headers, timeout=10)
+            response.raise_for_status()
+            return {"status": "healthy", "provider": self.provider_name}
+        except Exception as exc:
+            return {"status": "unreachable", "provider": self.provider_name, "error": str(exc)}
+
+    def execute(self, request: ProviderRequest) -> ProviderResult:
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": request.instructions
+                + "\nReturn JSON only, matching the required RunOutput envelope exactly.",
+            },
+            {"role": "user", "content": request.input_text},
+        ]
+        totals = _UsageTotals()
+        repairs = 0
+        for _ in range(8):
+            _check_cancelled(request)
+            body = self._chat(request, messages)
+            totals.add_chat(body)
+            choices = body.get("choices") or []
+            if not choices:
+                raise ProviderError("invalid_response", "Chat provider returned no choices.")
+            message = choices[0].get("message") or {}
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                if request.execute_tool is None:
+                    raise ProviderError(
+                        "tool_execution_unavailable",
+                        "Chat provider requested tools but no executor was provided.",
+                    )
+                # Preserve the complete assistant message. MiniMax needs reasoning_details
+                # and tool_calls from the preceding turn to continue its reasoning chain.
+                messages.append(message)
+                for call in tool_calls:
+                    function = call.get("function") or {}
+                    name = str(function.get("name") or "")
+                    arguments = _decode_tool_arguments(function.get("arguments"), name or "unknown")
+                    result = _execute_tool(request, name, arguments)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id"),
+                            "name": name,
+                            "content": json.dumps(result, sort_keys=True),
+                        }
+                    )
+                continue
+            content = str(message.get("content") or "")
+            try:
+                output = _parse_run_output(content)
+            except (ValidationError, json.JSONDecodeError, ValueError) as exc:
+                if repairs >= 2:
+                    raise ProviderError("invalid_output", f"Chat schema repair failed: {exc}") from exc
+                repairs += 1
+                messages.append(message)
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Repair the previous response to the RunOutput JSON contract. "
+                            f"Validation error: {exc}. Return JSON only. "
+                            f"{_ollama_payload_repair_hint(request.state.kind)}"
+                        ),
+                    }
+                )
+                continue
+            return totals.result(output, body.get("id"))
+        raise ProviderError("tool_loop_exhausted", "Chat provider exceeded the tool/repair limit.")
+
+    def _chat(self, request: ProviderRequest, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": request.model.model,
+            "messages": messages,
+            "temperature": 0,
+            **request.model.provider_options,
+        }
+        if request.tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    },
+                }
+                for tool in request.tools
+            ]
+        try:
+            response = httpx.post(
+                f"{self.base_url}/chat/completions",
+                headers=self.headers,
+                json=payload,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            raise _classify_http_error(
+                self.provider_name, exc.response.status_code, str(exc)
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise ProviderError("timeout", str(exc), retryable=True) from exc
+        except httpx.RequestError as exc:
+            raise ProviderError("unavailable", str(exc), retryable=True) from exc
 class OllamaProvider(ModelProvider):
     name = "ollama"
 
@@ -415,6 +540,13 @@ class _UsageTotals:
         self.input_tokens += int(body.get("prompt_eval_count", 0) or 0)
         self.output_tokens += int(body.get("eval_count", 0) or 0)
 
+    def add_chat(self, body: dict[str, Any]) -> None:
+        usage = body.get("usage") or {}
+        self.input_tokens += int(usage.get("prompt_tokens", 0) or 0)
+        self.output_tokens += int(usage.get("completion_tokens", 0) or 0)
+        details = usage.get("prompt_tokens_details") or {}
+        self.cached_tokens += int(details.get("cached_tokens", 0) or 0)
+
     def result(self, output: RunOutput, request_id: str | None) -> ProviderResult:
         return ProviderResult(
             output=output,
@@ -513,13 +645,40 @@ def _classify_http_error(provider: str, status: int | None, message: str) -> Pro
     return ProviderError(f"{provider}_http_error", message)
 
 
-def build_provider(model: ModelProfile, *, execution_mode: str, openai_api_key: str | None, ollama_url: str) -> ModelProvider:
+def build_provider(
+    model: ModelProfile,
+    *,
+    execution_mode: str,
+    openai_api_key: str | None,
+    ollama_url: str,
+    credential_resolver: Callable[[str], str | None] | None = None,
+) -> ModelProvider:
     if execution_mode == "preview":
         return PreviewProvider()
-    if model.provider == "openai":
-        if not openai_api_key:
-            raise ProviderError("missing_credentials", "OPENAI_API_KEY is required for the selected model.")
-        return OpenAIResponsesProvider(openai_api_key)
-    if model.provider == "ollama":
-        return OllamaProvider(ollama_url)
+    protocol = model.protocol or (
+        "ollama_chat" if model.provider in {"ollama", "local"} else "openai_responses"
+    )
+    key = openai_api_key if model.provider == "openai" and not model.api_key_env else None
+    if model.credential_ref and credential_resolver:
+        key = credential_resolver(model.credential_ref)
+    if not key and model.api_key_env:
+        key = os.getenv(model.api_key_env)
+    if protocol == "openai_responses":
+        if not key:
+            raise ProviderError(
+                "missing_credentials",
+                f"{model.api_key_env or 'OPENAI_API_KEY'} is required for the selected model.",
+            )
+        return OpenAIResponsesProvider(key)
+    if protocol == "openai_chat":
+        if not key:
+            raise ProviderError(
+                "missing_credentials",
+                f"{model.api_key_env or model.credential_ref or 'API key'} is required for the selected model.",
+            )
+        if not model.base_url:
+            raise ProviderError("invalid_provider", "An OpenAI Chat-compatible base URL is required.")
+        return OpenAIChatProvider(model.base_url, key, model.provider)
+    if protocol == "ollama_chat":
+        return OllamaProvider(model.base_url or ollama_url)
     raise ProviderError("unsupported_provider", f"Provider {model.provider!r} is not implemented in local v1.")

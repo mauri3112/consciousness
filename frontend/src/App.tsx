@@ -19,7 +19,8 @@ import {
   activateDraft, createDraft, decideApproval, eventStreamUrl, exportUrl, fetchAccessCatalog, fetchDiff,
   fetchCommand, fetchProcedure, fetchRunEvents, importProcedure, issueControl, rollbackVersion,
   saveDraft, validateDraft, type ApprovalRecord, type ProcedureDefinition,
-  type ProcedureSnapshot, type ProcedureState, type ProcedureVersion, type RunRecord
+  type ProcedureSnapshot, type ProcedureState, type ProcedureVersion, type RunRecord,
+  registerModel, testModel, type ModelProfile
 } from "./api";
 
 type View = "overview" | "editor" | "access" | "runs" | "approvals" | "mutations" | "models" | "integrations";
@@ -260,7 +261,7 @@ function ProcedureEditor({ snapshot }: { snapshot: ProcedureSnapshot }) {
     if (!draft) return;
     let index = definition.states.length + 1; let id = `state_${index}`;
     while (definition.states.some((state) => state.id === id)) { index += 1; id = `state_${index}`; }
-    const next: ProcedureState = { id, name: `State ${index}`, kind: "custom", domain: "New domain", goal_template: "Define the goal for this state.", prompt_contract: "Follow the state contract and preserve evidence.", output_contract: "A structured durable result.", tools: [], skills: [], access_preset_id: "coding-agent", access_overrides: { add_tools: [], remove_tools: [], add_skills: [], remove_skills: [], add_allowed_tool_patterns: [], remove_allowed_tool_patterns: [], permissions: null, mutation_level: null, requires_approval: null, rationale: null }, context_minimum: 32768, output_reserve: 4096, model_policy: "cheap-capable", max_attempts: 2, max_run_budget: null, x: 50, y: 50, is_current: false };
+    const next: ProcedureState = { id, name: `State ${index}`, kind: "custom", domain: "New domain", goal_template: "Define the goal for this state.", prompt_contract: "Follow the state contract and preserve evidence.", output_contract: "A structured durable result.", tools: [], skills: [], access_preset_id: "coding-agent", access_overrides: { add_tools: [], remove_tools: [], add_skills: [], remove_skills: [], add_allowed_tool_patterns: [], remove_allowed_tool_patterns: [], permissions: null, mutation_level: null, requires_approval: null, rationale: null }, context_minimum: 32768, output_reserve: 4096, model_policy: "cheap-capable", preferred_model_id: null, allow_model_fallback: true, max_attempts: 2, max_run_budget: null, x: 50, y: 50, is_current: false };
     const policy = { state_id: id, allowed_tool_patterns: [], mutation_level: "read_only", requires_approval: false, rationale: "New states begin read-only." };
     setDefinition((current) => ({ ...current, states: [...current.states, next], guardrails: { ...current.guardrails, capability_policies: [...current.guardrails.capability_policies, policy] } })); setSelectedEdgeId(""); setSelectedId(id);
   }
@@ -287,6 +288,7 @@ function ProcedureEditor({ snapshot }: { snapshot: ProcedureSnapshot }) {
       <Field label="Select state"><select value={selectedId} onChange={(event) => { setSelectedEdgeId(""); setSelectedId(event.target.value); }}>{definition.states.map((state) => <option key={state.id} value={state.id}>{state.name}</option>)}</select></Field>
       <Field label="Name"><input value={selected.name} disabled={!draft} onChange={(e) => updateState({ name: e.target.value })} /></Field>
       <div className="field-pair"><Field label="Kind"><select value={selected.kind} disabled={!draft} onChange={(e) => updateState({ kind: e.target.value })}>{["gather","curate","synthesize","validate","publish","audit","custom"].map((item) => <option key={item}>{item}</option>)}</select></Field><Field label="Model policy"><input value={selected.model_policy} disabled={!draft} onChange={(e) => updateState({ model_policy: e.target.value })} /></Field></div>
+      <div className="field-pair"><Field label="Pinned model"><select value={selected.preferred_model_id ?? ""} disabled={!draft} onChange={(event) => updateState({ preferred_model_id: event.target.value || null })}><option value="">Use policy</option>{definition.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select></Field><Field label="Fallback"><select value={String(selected.allow_model_fallback)} disabled={!draft || !selected.preferred_model_id} onChange={(event) => updateState({ allow_model_fallback: event.target.value === "true" })}><option value="false">pause if unavailable</option><option value="true">allow policy fallback</option></select></Field></div>
       <Field label="Domain"><input value={selected.domain} disabled={!draft} onChange={(e) => updateState({ domain: e.target.value })} /></Field>
       <Field label="Goal"><textarea value={selected.goal_template} disabled={!draft} onChange={(e) => updateState({ goal_template: e.target.value })} /></Field>
       <Field label="Prompt contract"><textarea value={selected.prompt_contract} disabled={!draft} onChange={(e) => updateState({ prompt_contract: e.target.value })} /></Field>
@@ -363,7 +365,43 @@ function AccessPresetsView({ snapshot }: { snapshot: ProcedureSnapshot }) {
 }
 
 function ModelsView({ snapshot }: { snapshot: ProcedureSnapshot }) {
-  return <section className="table-view"><PanelHeader title="Model registry" meta="operator-maintained policy data" /><table className="data-table"><thead><tr><th>Model</th><th>Provider</th><th>Context</th><th>Tier</th><th>Run cap</th><th>Capabilities</th></tr></thead><tbody>{snapshot.models.map((model) => <tr key={model.id}><td><strong>{model.id}</strong></td><td>{model.provider}</td><td>{numberFormat.format(model.context_window)}</td><td>{model.quality_tier}</td><td>{moneyFormat.format(model.max_run_budget)}</td><td><TagList values={model.capabilities} /></td></tr>)}</tbody></table></section>;
+  const client = useQueryClient();
+  const [showForm, setShowForm] = useState(false);
+  const [provider, setProvider] = useState("minimax");
+  const [model, setModel] = useState("MiniMax-M3");
+  const [baseUrl, setBaseUrl] = useState("https://api.minimax.io/v1");
+  const [keyEnv, setKeyEnv] = useState("MINIMAX_API_KEY");
+  const [apiKey, setApiKey] = useState("");
+  const [assignAudit, setAssignAudit] = useState(true);
+  const [testResult, setTestResult] = useState<Record<string, unknown> | null>(null);
+  const register = useMutation({
+    mutationFn: () => {
+      const id = `${provider}/${model}`;
+      const profile: ModelProfile = {
+        id, provider, model, protocol: provider === "ollama" ? "ollama_chat" : "openai_chat",
+        base_url: baseUrl || null, api_key_env: keyEnv || null, credential_ref: null,
+        billing_mode: provider === "ollama" ? "local" : provider === "minimax" ? "subscription" : "metered",
+        provider_options: provider === "minimax" ? { thinking: { type: "enabled" } } : {},
+        context_window: provider === "ollama" ? 32768 : 200000, relative_cost: provider === "ollama" ? 0 : 0.2,
+        max_run_budget: 0, quality_tier: provider === "minimax" ? 5 : 3,
+        strengths: provider === "minimax" ? ["procedure-design", "graph-supervision"] : ["reasoning"],
+        capabilities: ["structured-output", "tool-calling"], input_cost_per_million: 0,
+        output_cost_per_million: 0, open_weights: provider === "ollama", enabled: true
+      };
+      return registerModel(profile, apiKey, assignAudit ? ["audit"] : []);
+    },
+    onSuccess: () => { setApiKey(""); setShowForm(false); client.invalidateQueries({ queryKey: ["procedure"] }); }
+  });
+  const test = useMutation({ mutationFn: testModel, onSuccess: setTestResult });
+  function selectProvider(value: string) {
+    setProvider(value);
+    if (value === "minimax") { setModel("MiniMax-M3"); setBaseUrl("https://api.minimax.io/v1"); setKeyEnv("MINIMAX_API_KEY"); }
+    if (value === "ollama") { setModel("hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M"); setBaseUrl("http://localhost:11434"); setKeyEnv(""); }
+  }
+  return <section className="table-view model-registry"><PanelHeader title="Model registry" meta="provider-neutral, versioned assignments" />
+    <div className="model-actions"><button className="primary" onClick={() => setShowForm((value) => !value)}><Plus size={14} />Add model</button><p>Keys are write-only. Use an environment variable, or enable the encrypted local vault with <code>CONSCIOUSNESS_CREDENTIAL_KEY</code>.</p></div>
+    {showForm ? <div className="model-form"><div className="field-pair"><Field label="Provider"><select value={provider} onChange={(event) => selectProvider(event.target.value)}><option value="minimax">MiniMax</option><option value="ollama">Ollama</option><option value="openai-compatible">OpenAI-compatible</option></select></Field><Field label="Model"><input value={model} onChange={(event) => setModel(event.target.value)} /></Field></div><Field label="Base URL"><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></Field><div className="field-pair"><Field label="API key environment"><input value={keyEnv} onChange={(event) => setKeyEnv(event.target.value)} placeholder="PROVIDER_API_KEY" /></Field><Field label="API key (write-only)"><input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></Field></div><label className="check-field"><input type="checkbox" checked={assignAudit} onChange={(event) => setAssignAudit(event.target.checked)} />Assign this model to Audit with fallback disabled</label>{register.isError ? <p className="inline-error" role="alert">{register.error.message}</p> : null}<div className="decision-buttons"><button onClick={() => { setApiKey(""); setShowForm(false); }}>Cancel</button><button className="primary" disabled={register.isPending || !model} onClick={() => register.mutate()}>{register.isPending ? "Registering…" : "Register model"}</button></div></div> : null}
+    <table className="data-table"><thead><tr><th>Model</th><th>Provider</th><th>Auth</th><th>Context</th><th>Assigned states</th><th>Health</th></tr></thead><tbody>{snapshot.models.map((item) => <tr key={item.id}><td><strong>{item.id}</strong><small>{item.protocol ?? "legacy"}</small></td><td>{item.provider}<small>{item.billing_mode}</small></td><td>{item.credential_ref ? "vault configured" : item.api_key_env ?? "none"}</td><td>{numberFormat.format(item.context_window)}</td><td>{snapshot.states.filter((state) => state.preferred_model_id === item.id).map((state) => state.name).join(", ") || "policy fallback"}</td><td><button onClick={() => test.mutate(item.id)} disabled={test.isPending}>Test</button></td></tr>)}</tbody></table>{testResult ? <pre className="model-test-result">{JSON.stringify(testResult, null, 2)}</pre> : null}</section>;
 }
 
 function IntegrationsView({ snapshot }: { snapshot: ProcedureSnapshot }) {

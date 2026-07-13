@@ -78,6 +78,11 @@ def validate_procedure(definition: ProcedureDefinition) -> list[str]:
     model_ids = {model.id for model in definition.models if model.enabled}
     if not model_ids:
         errors.append("procedure must contain at least one enabled model")
+    for state in definition.states:
+        if state.preferred_model_id and state.preferred_model_id not in model_ids:
+            errors.append(
+                f"state {state.id} references unavailable model {state.preferred_model_id}"
+            )
     return errors
 
 

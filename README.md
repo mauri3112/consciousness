@@ -145,7 +145,12 @@ Run continuously:
 curl -X POST http://localhost:8770/api/v1/control/run
 ```
 
-`CONSCIOUSNESS_EXECUTION_MODE=preview` is explicit and requires no provider. For the bundled local profile, run `ollama pull qwen3.5:9b`, set the mode to `live`, and make sure `OLLAMA_URL` is reachable. OpenAI execution additionally requires `OPENAI_API_KEY` and operator-confirmed model rows.
+`CONSCIOUSNESS_EXECUTION_MODE=preview` is explicit and requires no provider. The run-two profile uses
+Ornith locally and MiniMax M3 for Audit. Install Ornith with
+`ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M`, set `MINIMAX_API_KEY`,
+then activate it with `consciousness-upgrade-second-run-profile --apply`. Any model can reference an
+API key environment variable; the Studio can also write a key to the encrypted local vault when
+`CONSCIOUSNESS_CREDENTIAL_KEY` is configured.
 
 For a repeatable live Ollama cycle against the normal persistent Compose volume:
 
@@ -155,7 +160,7 @@ python3 scripts/verify-live-cycle.py
 ```
 
 The verifier pauses continuous execution, starts from the volume's current state, polls each durable
-step command, proves all six canonical states succeed with `local/qwen3.5-9b`, and confirms the marker
+step command, proves the pinned state models execute, and confirms the marker
 returns to its starting state. See [`docs/operator-runbook.md`](docs/operator-runbook.md) for preflight
 and safety details.
 

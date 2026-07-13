@@ -31,6 +31,7 @@ const stateSchema = z.object({
   tools: z.array(z.string()), skills: z.array(z.string()), context_minimum: z.number(),
   access_preset_id: z.string().nullable().default(null), access_overrides: overridesSchema.default({ add_tools: [], remove_tools: [], add_skills: [], remove_skills: [], add_allowed_tool_patterns: [], remove_allowed_tool_patterns: [], permissions: null, mutation_level: null, requires_approval: null, rationale: null }),
   output_reserve: z.number().default(4096), model_policy: z.string(), max_attempts: z.number().default(2),
+  preferred_model_id: z.string().nullable().default(null), allow_model_fallback: z.boolean().default(true),
   max_run_budget: z.number().nullable().default(null), x: z.number(), y: z.number(), is_current: z.boolean()
 });
 
@@ -41,6 +42,10 @@ const transitionSchema = z.object({
 
 const modelSchema = z.object({
   id: z.string(), provider: z.string(), model: z.string(), context_window: z.number(),
+  protocol: z.enum(["ollama_chat", "openai_responses", "openai_chat"]).nullable().default(null),
+  base_url: z.string().nullable().default(null), api_key_env: z.string().nullable().default(null),
+  credential_ref: z.string().nullable().default(null), billing_mode: z.enum(["local", "metered", "subscription"]).default("metered"),
+  provider_options: z.record(z.string(), z.unknown()).default({}),
   relative_cost: z.number(), max_run_budget: z.number(), quality_tier: z.number(),
   strengths: z.array(z.string()), capabilities: z.array(z.string()).default(["structured-output"]),
   input_cost_per_million: z.number().default(0), output_cost_per_million: z.number().default(0),
@@ -207,6 +212,21 @@ export function decideApproval(id: string, approved: boolean, note?: string) {
     method: "POST",
     body: JSON.stringify({ approved, note })
   });
+}
+
+export function registerModel(
+  profile: ModelProfile,
+  apiKey: string,
+  assignStates: string[]
+) {
+  return request<ProcedureVersion>("/models", {
+    method: "POST",
+    body: JSON.stringify({ profile, api_key: apiKey || null, assign_states: assignStates })
+  });
+}
+
+export function testModel(id: string) {
+  return request<Record<string, unknown>>(`/models/${encodeURIComponent(id)}/test?execute=true`, { method: "POST" });
 }
 
 export function fetchRunEvents(runId: string) {

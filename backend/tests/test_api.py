@@ -132,15 +132,15 @@ def test_model_health_route_accepts_model_ids_with_slashes(tmp_path, monkeypatch
 
     class HealthyProvider:
         def health(self):
-            return {"status": "healthy", "model": "qwen3.5:9b"}
+            return {"status": "healthy", "model": "Ornith-1.0-9B"}
 
     monkeypatch.setattr("consciousness.api.build_provider", lambda *_args, **_kwargs: HealthyProvider())
     app.dependency_overrides[get_store] = lambda: store
     try:
         client = TestClient(app)
-        response = client.post("/api/v1/models/local/qwen3.5-9b/test")
+        response = client.post("/api/v1/models/local/ornith-1.0-9b-q4/test")
 
         assert response.status_code == 200
-        assert response.json() == {"status": "healthy", "model": "qwen3.5:9b"}
+        assert response.json() == {"status": "healthy", "model": "Ornith-1.0-9B"}
     finally:
         app.dependency_overrides.clear()

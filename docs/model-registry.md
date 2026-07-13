@@ -6,6 +6,9 @@ Each row should define:
 
 - provider,
 - model id,
+- protocol and base URL,
+- API-key environment name or write-only credential reference,
+- billing mode (`local`, `metered`, or `subscription`),
 - context window,
 - relative cost,
 - max run budget,
@@ -30,10 +33,16 @@ Default preference order:
 
 | id | provider | context | cost | tier | best for |
 | --- | --- | ---: | ---: | ---: | --- |
-| `local/qwen3.5-9b` | Ollama | 262,144 | 0.0x | 3 | full offline loop, structured output, and tool calling |
+| `local/ornith-1.0-9b-q4` | Ollama | 32,768 operating limit | 0.0x | 3 | routine Gather through Publish work |
+| `minimax/MiniMax-M3` | MiniMax Chat Completions | 200,000 configured minimum | subscription | 5 | Audit, graph supervision, and procedure governance |
 | `openai/gpt-5.6-luna` | OpenAI | operator-confirmed | configured | 3 | efficient structured work |
 | `openai/gpt-5.6-sol` | OpenAI | operator-confirmed | configured | 5 | procedure design and audits |
 
 Operators must confirm model availability, context limits, capabilities, and pricing in their registry. Pricing and model IDs are data rather than selection code so examples cannot silently become current facts.
 
-The bundled local row is verified against Ollama's published `qwen3.5:9b` metadata. Install it with `ollama pull qwen3.5:9b` before setting `CONSCIOUSNESS_EXECUTION_MODE=live`.
+Install the official GGUF with
+`ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q4_K_M`. MiniMax uses the
+OpenAI-compatible Chat Completions protocol at `https://api.minimax.io/v1` and resolves
+`MINIMAX_API_KEY`; it does not reuse the OpenAI Responses adapter. UI-entered secrets are never
+returned by the API and require the encrypted vault master key. Hermes OAuth is not imported or
+silently reused; provider subscription OAuth remains an explicit future auth strategy.

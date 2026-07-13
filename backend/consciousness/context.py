@@ -12,10 +12,19 @@ def build_context_manifest(
     *,
     only_memories: OnlyMemoriesClient | None,
     previous_runs: list[RunRecord],
+    memory_space_id: str = "default",
 ) -> ContextManifest:
     items: list[ContextItem] = []
     if state.kind == "gather" and only_memories:
-        payload = only_memories.search(state.goal_template, limit=8)
+        payload = only_memories.search(
+            state.goal_template,
+            limit=12,
+            intent="evidence",
+            space_ids=[memory_space_id],
+            planes=["knowledge"],
+            exclude_types=["artifact"],
+            include_generated=False,
+        )
         for index, memory in enumerate(payload.get("results", [])):
             content = str(memory.get("content", ""))
             memory_id = str(memory.get("id", f"memory-{index}"))
@@ -28,13 +37,55 @@ def build_context_manifest(
                     content_hash=hashlib.sha256(content.encode()).hexdigest(),
                     token_estimate=_estimate_tokens(content),
                     score=float(memory.get("rank") or memory.get("base_importance") or 0),
+                    source_class="knowledge",
+                    evidence_role="primary_retrieval",
                 )
             )
 
-    for run in previous_runs[:6]:
-        if not run.output:
-            continue
-        content = run.output.summary
+    cycle_runs: list[RunRecord] = []
+    for run in previous_runs:
+        if run.state_id == "audit" and run.status == "succeeded":
+            break
+        cycle_runs.append(run)
+    predecessor_states = {
+        "curate": {"gather"},
+        "synthesize": {"gather", "curate"},
+        "validate": {"curate", "synthesize"},
+        "publish": {"curate", "validate"},
+    }.get(state.id, set())
+    if state.kind == "audit":
+        handoff_runs = cycle_runs[:16]
+    elif state.kind == "gather":
+        handoff_runs = []
+    else:
+        handoff_runs = [
+            run
+            for run in cycle_runs
+            if run.status == "succeeded" and run.state_id in predecessor_states
+        ][:4]
+
+    for run in handoff_runs:
+        if state.kind == "audit":
+            content = json.dumps(
+                {
+                    "state": run.state_id,
+                    "status": run.status,
+                    "attempt": run.attempt,
+                    "model_id": run.model_id,
+                    "input_tokens": run.input_tokens,
+                    "output_tokens": run.output_tokens,
+                    "cost": run.cost,
+                    "error_category": run.error_category,
+                    "error_message": run.error_message,
+                    "summary": run.output.summary if run.output else None,
+                    "risks": run.output.unresolved_risks if run.output else [],
+                },
+                sort_keys=True,
+            )
+        else:
+            if not run.output:
+                continue
+            content = run.output.model_dump_json()
         items.append(
             ContextItem(
                 id=run.id,
@@ -43,11 +94,14 @@ def build_context_manifest(
                 source_uri=f"sqlite://runs/{run.id}",
                 content_hash=hashlib.sha256(content.encode()).hexdigest(),
                 token_estimate=_estimate_tokens(content),
-                score=run.output.confidence,
+                score=run.output.confidence if run.output else 0,
+                source_class="audit_telemetry" if state.kind == "audit" else "run_handoff",
+                evidence_role="cycle_telemetry" if state.kind == "audit" else "typed_predecessor",
+                origin_run_id=run.id,
             )
         )
 
-    items.sort(key=lambda item: (-item.score, item.id))
+    items.sort(key=lambda item: (item.source_class != "knowledge", -item.score, item.id))
     available = max(1, state.context_minimum - state.output_reserve)
     selected: list[ContextItem] = []
     used = 0

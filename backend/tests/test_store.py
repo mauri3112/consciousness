@@ -72,6 +72,10 @@ def test_bundled_profile_upgrade_is_versioned_audited_and_idempotent(tmp_path):
     definition.models[0].id = "local/llama-3.1-8b-instruct"
     definition.models[0].provider = "ollama"
     definition.models[0].model = "llama-3.1-8b-instruct"
+    for state in definition.states:
+        if state.preferred_model_id == "local/ornith-1.0-9b-q4":
+            state.preferred_model_id = None
+            state.allow_model_fallback = True
     updated = store.update_draft(draft.id, definition, expected_revision=draft.revision)
     store.activate_version(updated.id, rationale="test legacy profile")
     store.set_current_state("validate")
@@ -87,7 +91,7 @@ def test_bundled_profile_upgrade_is_versioned_audited_and_idempotent(tmp_path):
         "only_memories.navigate",
         "only_memories.versions",
     ]
-    assert "local/qwen3.5-9b" in {model.id for model in upgraded.definition.models}
+    assert "local/ornith-1.0-9b-q4" in {model.id for model in upgraded.definition.models}
     assert "coding-agent" in {preset.id for preset in upgraded.definition.access_presets}
     assert "local/llama-3.1-8b-instruct" not in {model.id for model in upgraded.definition.models}
     assert len(store.list_mutations()) == mutations_before + 1
@@ -106,16 +110,20 @@ def test_choose_model_prefers_cheapest_sufficient_model(tmp_path):
     assert model.relative_cost <= 1.0
 
 
-def test_starter_local_model_can_execute_every_state(tmp_path):
+def test_starter_profile_pins_routine_states_local_and_audit_remote(tmp_path):
     store = ConsciousnessStore(tmp_path / "consciousness.db")
     store.setup()
 
+    states = store.snapshot().states
     selected = {
-        choose_model(state, store.list_models(), local_only=True).id
-        for state in store.snapshot().states
+        state.id: choose_model(state, store.list_models(), local_only=state.id != "audit").id
+        for state in states
     }
 
-    assert selected == {"local/qwen3.5-9b"}
+    assert selected["audit"] == "minimax/MiniMax-M3"
+    assert {selected[state.id] for state in states if state.id != "audit"} == {
+        "local/ornith-1.0-9b-q4"
+    }
 
 
 def test_prompt_requires_run_output_envelope(tmp_path):

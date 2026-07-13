@@ -86,7 +86,11 @@ def upgrade_bundled_profile(store: ConsciousnessStore) -> ProcedureVersion | Non
             changes.append({"kind": "capability-policy", "state_id": policy.state_id})
             definition.guardrails.capability_policies[index] = defaults[policy.state_id]
 
-    legacy_local_ids = {"local/llama-3.1-8b-instruct", "local/qwen2.5-14b-instruct"}
+    legacy_local_ids = {
+        "local/llama-3.1-8b-instruct",
+        "local/qwen2.5-14b-instruct",
+        "local/qwen3.5-9b",
+    }
     legacy_models = [model.id for model in definition.models if model.id in legacy_local_ids]
     if legacy_models:
         definition.models = [model for model in definition.models if model.id not in legacy_local_ids]
@@ -110,7 +114,7 @@ def upgrade_bundled_profile(store: ConsciousnessStore) -> ProcedureVersion | Non
     store.add_recap(
         run_id=None,
         auditor_model_id="operator-maintenance",
-        summary="Applied bundled safety, agent access presets, and qwen3.5:9b profile to the persistent procedure.",
+        summary="Applied bundled safety, agent access presets, and Ornith profile to the persistent procedure.",
         decision="activate_version",
         procedure_changes=changes,
     )
@@ -128,3 +132,90 @@ def upgrade_bundled_profile_cli() -> None:
     store.setup()
     version = upgrade_bundled_profile(store)
     print(json.dumps({"status": "unchanged" if version is None else "activated", "version_id": version.id if version else store.current_version().id}))
+
+
+def upgrade_second_run_profile(store: ConsciousnessStore) -> ProcedureVersion | None:
+    """Activate the isolated Ornith routine loop plus MiniMax M3 audit supervisor."""
+    active = store.current_version()
+    definition = active.definition.model_copy(deep=True)
+    starter_states = {str(item["id"]): item for item in STARTER_STATES}
+    desired_models = {
+        profile.id: profile
+        for profile in (ModelProfile.model_validate(item) for item in STARTER_MODELS)
+        if profile.id in {"local/ornith-1.0-9b-q4", "minimax/MiniMax-M3"}
+    }
+    changed: list[dict[str, object]] = []
+    old_ids = {
+        "local/qwen3.5-9b",
+        "local/qwen2.5-14b-instruct",
+        "local/llama-3.1-8b-instruct",
+    }
+    remaining = [model for model in definition.models if model.id not in old_ids | desired_models.keys()]
+    next_models = remaining + list(desired_models.values())
+    if definition.models != next_models:
+        definition.models = next_models
+        changed.append(
+            {
+                "kind": "second-run-models",
+                "model_ids": sorted(desired_models),
+                "removed_model_ids": sorted(old_ids),
+            }
+        )
+    for state in definition.states:
+        desired = starter_states.get(state.id)
+        if not desired:
+            continue
+        before = {
+            "context_minimum": state.context_minimum,
+            "preferred_model_id": state.preferred_model_id,
+            "allow_model_fallback": state.allow_model_fallback,
+        }
+        state.context_minimum = int(desired["context_minimum"])
+        state.preferred_model_id = str(desired["preferred_model_id"])
+        state.allow_model_fallback = bool(desired["allow_model_fallback"])
+        after = {
+            "context_minimum": state.context_minimum,
+            "preferred_model_id": state.preferred_model_id,
+            "allow_model_fallback": state.allow_model_fallback,
+        }
+        if before != after:
+            changed.append({"kind": "state-model-selector", "state_id": state.id, **after})
+    if not changed:
+        return None
+    draft = store.create_draft(active.id)
+    updated = store.update_draft(draft.id, definition, expected_revision=draft.revision)
+    errors = store.validate_version(updated.id)
+    if errors:
+        raise RuntimeError("second-run profile is invalid: " + "; ".join(errors))
+    activated = store.activate_version(
+        updated.id,
+        rationale="pin Ornith 9B routine agents and MiniMax M3 audit supervisor for run two",
+    )
+    store.add_recap(
+        run_id=None,
+        auditor_model_id="operator-maintenance",
+        summary="Activated the run-two Ornith routine profile and MiniMax M3 audit supervisor.",
+        decision="activate_version",
+        procedure_changes=changed,
+    )
+    return activated
+
+
+def upgrade_second_run_profile_cli() -> None:
+    settings = get_settings()
+    parser = argparse.ArgumentParser(description="Activate the Ornith plus MiniMax run-two profile.")
+    parser.add_argument("--apply", action="store_true", help="Required to activate the new version.")
+    args = parser.parse_args()
+    if not args.apply:
+        parser.error("--apply is required")
+    store = ConsciousnessStore(settings.database_path, execution_mode=settings.execution_mode)
+    store.setup()
+    version = upgrade_second_run_profile(store)
+    print(
+        json.dumps(
+            {
+                "status": "unchanged" if version is None else "activated",
+                "version_id": version.id if version else store.current_version().id,
+            }
+        )
+    )

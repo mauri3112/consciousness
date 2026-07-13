@@ -12,10 +12,12 @@ import pytest
 from consciousness.models import ContextManifest, ModelProfile, ProcedureState, RunOutput, StateKind
 from consciousness.providers import (
     OllamaProvider,
+    OpenAIChatProvider,
     OpenAIResponsesProvider,
     ProviderError,
     ProviderRequest,
     ProviderTool,
+    build_provider,
 )
 
 
@@ -278,6 +280,85 @@ def test_ollama_success_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.output.summary == "done"
     assert result.request_id == "ollama-1"
     assert (result.input_tokens, result.output_tokens) == (12, 8)
+
+
+def test_openai_chat_preserves_minimax_reasoning_message_in_tool_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = deque(
+        [
+            FakeHTTPResponse(
+                {
+                    "id": "chat-1",
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "reasoning_details": [{"type": "reasoning", "text": "inspect"}],
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "type": "function",
+                                        "function": {"name": "memory.search", "arguments": '{"q":"x"}'},
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                }
+            ),
+            FakeHTTPResponse(
+                {
+                    "id": "chat-2",
+                    "choices": [{"message": {"role": "assistant", "content": output().model_dump_json()}}],
+                    "usage": {"prompt_tokens": 4, "completion_tokens": 3},
+                }
+            ),
+        ]
+    )
+    calls: list[dict[str, Any]] = []
+
+    def post(*_args: Any, **kwargs: Any) -> FakeHTTPResponse:
+        calls.append(kwargs["json"])
+        return responses.popleft()
+
+    monkeypatch.setattr(httpx, "post", post)
+    request = provider_request(
+        tools=[ProviderTool("memory.search", "Search", {"type": "object"})],
+        execute_tool=lambda _name, _args: {"hits": 1},
+    )
+
+    result = OpenAIChatProvider("https://api.minimax.io/v1", "secret", "minimax").execute(
+        request
+    )
+
+    assert (result.input_tokens, result.output_tokens) == (9, 5)
+    assert calls[1]["messages"][2]["reasoning_details"][0]["text"] == "inspect"
+    assert calls[1]["messages"][3]["tool_call_id"] == "call-1"
+
+
+def test_build_provider_resolves_any_provider_key_from_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CUSTOM_PROVIDER_KEY", "env-secret")
+    model = provider_request().model.model_copy(
+        update={
+            "provider": "custom",
+            "protocol": "openai_chat",
+            "base_url": "https://provider.example/v1",
+            "api_key_env": "CUSTOM_PROVIDER_KEY",
+        }
+    )
+
+    provider = build_provider(
+        model,
+        execution_mode="live",
+        openai_api_key=None,
+        ollama_url="http://ollama",
+    )
+
+    assert isinstance(provider, OpenAIChatProvider)
+    assert provider.api_key == "env-secret"
 
 
 def test_ollama_repairs_malformed_output_once(monkeypatch: pytest.MonkeyPatch) -> None:
