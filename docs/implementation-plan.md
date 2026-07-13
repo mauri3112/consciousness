@@ -103,6 +103,11 @@ The API binds to loopback by default, restricts CORS to configured Studio origin
   preflights passed on 2026-07-13: Ornith used 92 input/35 output tokens and MiniMax M3 used
   272 input/104 output tokens. The MiniMax adapter now requests split reasoning and defensively
   excludes native `<think>` prefixes from the RunOutput payload.
+- [-] **EXP-003** — Run and assess the isolated Ornith/MiniMax memory-stewardship soak. Dependencies:
+  EXP-002. Evidence: `memory-stewardship-20260713-ornith-minimax` started on 2026-07-13 with a
+  dedicated memory space, five verified primary-source fixtures, healthy snapshot/backup supervision,
+  and a 300-second cadence. The opening Ornith Publish and MiniMax Audit both succeeded; the inherited
+  pre-run cycle is now closed and the graph has advanced to a fresh Gather cycle with zero failures.
 - [-] **QA-001** — CI lint/type/test/build coverage plus migration, contract, recovery, API, and browser tests. Dependencies: all implementation milestones. Evidence: 77 backend tests, Ruff, frontend build, authenticated Compose contract/rebuild, normal-volume live Ollama cycle, live lifecycle acceptance, operator regression, and in-app desktop/mobile QA pass; configured OpenAI smoke remains.
 - [-] **REL-001** — Clean install and upgrade rehearsal, release checklist, limitations, and operator runbook. Dependencies: FLOW-003, QA-001, OPS-001, OPS-002. Evidence: fresh live SQLite install/cycle, populated Compose backup upgrade integrity rehearsal, rebuilt healthy services, and `docs/operator-runbook.md`; v1 tag remains gated on QA-001/OpenAI disposition.
 
@@ -133,6 +138,7 @@ The milestone checkbox is authoritative. Every row below is part of the correspo
 | OPS-001 | Deployment; CORE-003, API-001 | API/worker/Studio Compose, health, volumes, shutdown, backup/restore/upgrade docs | `docker compose config`; fresh build/up; health checks; worker restart and restore rehearsal | Healthy Compose and restart evidence recorded 2026-07-10; rebuilt API/worker/Studio all healthy again on 2026-07-11 |
 | OPS-002 | Operations; CORE-004 | Structured logs, metrics, diagnostics, retention/VACUUM, secret redaction | Log/redaction tests; metrics scrape; diagnostics/backup/VACUUM retention rehearsal | JSON logging and recursive credential redaction tests pass; metrics scrape and populated-db backup/diagnostics/VACUUM rehearsal pass |
 | EXP-001 | Memory soak experiment; FLOW-003, OPS-001, OPS-002 | Restartable supervisor, phased corpus, one-model guard, durable 300-second cadence, snapshots/status/timeline, paired integrity-checked backups, monitoring and assessment docs | Unit tests; fixture reference validation; live Compose launch; verify interval/model/state guards, UI retrieval, supervisor health, backup hashes/integrity, and successful agent evidence | Complete setup 2026-07-12: live eight-hour run active under `memory-stewardship-20260712`; six roles, five initial memories, four paired backups, three snapshots, one resident Qwen model, healthy consoles/supervisor, and five successful Qwen agent runs across Validate, Publish, Audit, Gather, and Curate |
+| EXP-003 | Isolated second soak; EXP-002 | Eight-hour Ornith routine workflow with MiniMax M3 Audit, provenance-scoped fixtures, timed phases, snapshots, paired backups, and final assessment | Preserve the 300-second cadence; verify model assignments, retrieval isolation, successful agent evidence, supervisor health, and final paused state | In progress 2026-07-13: isolated experiment started; five scoped fixtures, first snapshot and backup, successful Ornith Publish and MiniMax Audit, healthy services, and zero runtime failures |
 | QA-001 | CI/release QA; all implementation tasks | Pytest/Ruff/type/test/build/Compose CI plus migration/provider/tool/recovery/API/browser suites | `cd backend && pytest -q && ruff check consciousness tests`; `cd frontend && npm run build`; `docker compose config`; Playwright E2E | Partial: 77 backend tests, Ruff, build, authenticated Compose rebuild/health with direct API 401 plus proxied readiness/export/SSE success, operator browser regression, in-app desktop/mobile QA, normal-volume live Ollama cycle, and lifecycle acceptance pass; configured OpenAI smoke remains |
 | REL-001 | Release; FLOW-003, QA-001, OPS-001, OPS-002 | Clean-install/upgrade rehearsal, checklist, limitations, operator runbook and v1 tag | Execute every release gate on a fresh volume and an upgraded scaffold backup | Partial: fresh live database and full cycle pass; populated Compose backup reopens with `integrity: ok`; runbook/checklist/limitations added; v1 tag waits on QA-001/OpenAI disposition |
 
@@ -153,6 +159,11 @@ docker compose config
 Full local acceptance additionally starts only-memories, `consciousness-api`, `consciousness-worker`, and the Studio, completes one six-state cycle, interrupts the worker once, and verifies the graph marker, event log, artifacts, approvals, and usage ledger.
 
 ## Changelog
+
+- 2026-07-13 — Started `memory-stewardship-20260713-ornith-minimax` with an isolated memory space,
+  five verified primary-source fixtures, Ornith for routine states, and MiniMax M3 for Audit. The
+  opening scheduled Publish and Audit both succeeded, all four services remained healthy, and the
+  graph advanced to a fresh Gather cycle with zero failures.
 
 - 2026-07-13 — Closed the run-two cloud preflight with the operator-provided MiniMax subscription
   key. A live M3 call exposed native `<think>` content ahead of the structured envelope; the generic
